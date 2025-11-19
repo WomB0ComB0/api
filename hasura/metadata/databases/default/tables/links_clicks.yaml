@@ -1,0 +1,22 @@
+table:
+  schema: links
+  name: clicks
+object_relationships:
+  - name: link
+    using:
+      foreign_key_constraint_on: link_id
+select_permissions:
+  - role: user
+    permission:
+      columns:
+        - id
+        - link_id
+        - ip_address
+        - user_agent
+        - referer
+        - country
+        - clicked_at
+      filter:
+        link:
+          user_id:
+            _eq: X-Hasura-User-Id

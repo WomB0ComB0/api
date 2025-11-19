@@ -1,0 +1,95 @@
+- collection: allowed-queries
+  queries:
+    - name: GetLinkBySlug
+      query: |
+        query GetLinkBySlug($slug: String!) {
+          links_links(where: {slug: {_eq: $slug}, is_active: {_eq: true}}) {
+            id
+            slug
+            target_url
+            title
+            description
+            clicks
+          }
+        }
+    
+    - name: ListUserLinks
+      query: |
+        query ListUserLinks {
+          links_links(order_by: {created_at: desc}) {
+            id
+            slug
+            target_url
+            title
+            description
+            clicks
+            is_active
+            created_at
+            updated_at
+          }
+        }
+    
+    - name: CreateLink
+      query: |
+        mutation CreateLink($slug: String!, $target_url: String!, $title: String, $description: String) {
+          insert_links_links_one(object: {
+            slug: $slug,
+            target_url: $target_url,
+            title: $title,
+            description: $description
+          }) {
+            id
+            slug
+            target_url
+            title
+            description
+            created_at
+          }
+        }
+    
+    - name: UpdateLink
+      query: |
+        mutation UpdateLink($id: uuid!, $target_url: String, $title: String, $description: String, $is_active: Boolean) {
+          update_links_links_by_pk(
+            pk_columns: {id: $id},
+            _set: {
+              target_url: $target_url,
+              title: $title,
+              description: $description,
+              is_active: $is_active
+            }
+          ) {
+            id
+            slug
+            target_url
+            title
+            description
+            is_active
+            updated_at
+          }
+        }
+    
+    - name: DeleteLink
+      query: |
+        mutation DeleteLink($id: uuid!) {
+          delete_links_links_by_pk(id: $id) {
+            id
+          }
+        }
+    
+    - name: GetLinkAnalytics
+      query: |
+        query GetLinkAnalytics($link_id: uuid!) {
+          links_clicks(where: {link_id: {_eq: $link_id}}, order_by: {clicked_at: desc}, limit: 100) {
+            id
+            clicked_at
+            country
+            referer
+            user_agent
+          }
+          links_clicks_aggregate(where: {link_id: {_eq: $link_id}}) {
+            aggregate {
+              count
+            }
+          }
+        }
