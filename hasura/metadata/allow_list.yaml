@@ -1,4 +1,3 @@
-- collection_name: allowed-queries
-  role: user
+- collection: allowed-queries
   scope:
     global: true
