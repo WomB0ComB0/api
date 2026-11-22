@@ -1,14 +1,6 @@
 http:
   middlewares:
-    # JWT Authentication
-    jwt-auth:
-      plugin:
-        jwt:
-          secret: ${JWT_SECRET}
-          alg: HS256
-          required: true
-          
-    # CORS
+    # CORS aligned with mikeodnis.dev properties and cdn.mikeodnis.dev
     cors:
       headers:
         accessControlAllowMethods:
@@ -21,31 +13,43 @@ http:
         accessControlAllowOriginList:
           - https://mikeodnis.dev
           - https://www.mikeodnis.dev
+          - https://cdn.mikeodnis.dev
+          - https://blog.mikeodnis.dev
+          - https://news.mikeodnis.dev
+          - https://links.mikeodnis.dev
         accessControlAllowHeaders:
-          - "*"
+          - Accept
+          - Authorization
+          - Content-Type
+          - X-API-Key
+          - X-Request-ID
         accessControlExposeHeaders:
           - Content-Length
           - X-Request-ID
         accessControlAllowCredentials: true
         accessControlMaxAge: 86400
-        
+        addVaryHeader: true
+
     # Security Headers
     security-headers:
       headers:
         browserXssFilter: true
         contentTypeNosniff: true
         frameDeny: true
-        sslRedirect: true
+        referrerPolicy: "strict-origin-when-cross-origin"
         stsIncludeSubdomains: true
         stsPreload: true
         stsSeconds: 31536000
+        forceSTSHeader: true
         customResponseHeaders:
-          X-Request-ID: "{{ .RequestID }}"
-          
+          Server: ""
+          X-Powered-By: ""
+
     # Compression
     compress:
-      compress: {}
-      
+      compress:
+        minResponseBodyBytes: 1024
+
     # Rate limiting (global)
     global-ratelimit:
       rateLimit:

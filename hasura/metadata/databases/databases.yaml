@@ -7,5 +7,6 @@
         from_env: HASURA_GRAPHQL_DATABASE_URL
       isolation_level: read-committed
   tables:
+    - "!include core_users.yaml"
     - "!include links_links.yaml"
     - "!include links_clicks.yaml"

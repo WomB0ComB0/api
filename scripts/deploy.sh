@@ -1,79 +1,43 @@
 #!/bin/bash
 
-# Production deployment script
+# Production deployment script for api.mikeodnis.dev
 
-set -e
+set -euo pipefail
 
-echo "🚀 Deploying to Production"
-echo "=========================="
-echo ""
+echo "Deploying api.mikeodnis.dev to Production"
+echo "========================================="
 
-# Check if on main branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$BRANCH" != "main" ]; then
-    echo "❌ Error: You must be on the main branch to deploy to production"
+if [ "$BRANCH" != "master" ] && [ "$BRANCH" != "main" ]; then
+    echo "Error: You must be on master or main branch to deploy (current: $BRANCH)"
     exit 1
 fi
 
-# Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
-    echo "❌ Error: You have uncommitted changes"
+    echo "Error: You have uncommitted changes"
     exit 1
 fi
 
-# Pull latest changes
-echo "📥 Pulling latest changes..."
-git pull origin main
+echo "Pulling latest changes..."
+git pull origin "$BRANCH"
 
-# Backup database
-echo ""
-echo "💾 Creating database backup..."
-./scripts/backup-db.sh
+echo "Running tests..."
+make test
 
-# Build images
-echo ""
-echo "🏗️  Building images..."
-docker-compose build
+echo "Creating database backup..."
+./scripts/backup-db.sh || echo "Warning: backup skipped (postgres may not be running yet)"
 
-# Run tests
-echo ""
-echo "🧪 Running tests..."
-make test || {
-    echo "❌ Tests failed! Deployment aborted."
-    exit 1
-}
+echo "Building and deploying services..."
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
 
-# Pull latest images
-echo ""
-echo "📦 Pulling latest images..."
-docker-compose pull
+echo "Waiting for services to settle..."
+sleep 15
 
-# Deploy with zero-downtime
-echo ""
-echo "🎯 Deploying services..."
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+echo "Running health checks..."
+./scripts/test-api.sh https://api.mikeodnis.dev
 
-# Wait for services to be healthy
-echo ""
-echo "⏳ Waiting for services to be healthy..."
-sleep 30
+echo "Cleaning up dangling images..."
+docker image prune -f
 
-# Health check
-echo ""
-echo "🏥 Running health checks..."
-./scripts/test-api.sh https://api.mikeodnis.dev || {
-    echo "❌ Health check failed! Rolling back..."
-    docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
-    exit 1
-}
-
-# Cleanup
-echo ""
-echo "🧹 Cleaning up..."
-docker system prune -f
-
-echo ""
-echo "✅ Deployment successful!"
-echo ""
-echo "📊 Service Status:"
-docker-compose ps
+echo "Deployment successful!"
+docker compose ps

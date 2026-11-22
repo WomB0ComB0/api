@@ -1,105 +1,60 @@
-import cors from '@fastify/cors';
-import jwt from '@fastify/jwt';
-import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
-import Fastify from 'fastify';
-import { healthRoutes } from './routes/health.js';
-import { userRoutes } from './routes/users.js';
-import { initTelemetry } from './telemetry.js';
+import { opentelemetry } from '@elysiajs/opentelemetry';
+import { trace } from '@opentelemetry/api';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { Elysia } from 'elysia';
+import { buildApp } from './app.js';
+import { loadConfig } from './config.js';
+import { createDatabase } from './db.js';
 
-// Initialize OpenTelemetry
-initTelemetry();
+const config = loadConfig();
+const db = createDatabase(config.databaseUrl);
+const coreApp = buildApp({ config, db });
 
-const fastify = Fastify({
-  logger: {
-    level: process.env.LOG_LEVEL || 'info',
-    transport:
-      process.env.NODE_ENV === 'development'
-        ? {
-            target: 'pino-pretty',
-            options: {
-              colorize: true,
-              translateTime: 'HH:MM:ss Z',
-              ignore: 'pid,hostname',
-            },
-          }
-        : undefined,
-  },
-  requestIdHeader: 'x-request-id',
-  disableRequestLogging: false,
-  trustProxy: true,
+const server = config.otelEndpoint
+  ? new Elysia({ name: 'core-runtime' })
+      .use(
+        opentelemetry({
+          serviceName: config.otelServiceName,
+          traceExporter: new OTLPTraceExporter({
+            url: `${config.otelEndpoint}/v1/traces`,
+          }),
+        })
+      )
+      .use(coreApp)
+  : coreApp;
+
+const hostname = process.env.HOST || '::';
+server.listen({
+  port: config.port,
+  hostname,
 });
 
-// CORS
-await fastify.register(cors, {
-  origin: [
-    'https://mikeodnis.dev',
-    'https://www.mikeodnis.dev',
-    /localhost/,
-  ],
-  credentials: true,
-});
+console.log(`Core service (Elysia) listening on http://[${hostname}]:${config.port}`);
 
-// JWT
-await fastify.register(jwt, {
-  secret: process.env.JWT_SECRET || 'development-secret-change-me',
-  sign: {
-    expiresIn: '7d',
-  },
-});
-
-// OpenAPI Documentation
-await fastify.register(swagger, {
-  openapi: {
-    info: {
-      title: 'Core API',
-      description: 'Core business logic and shared utilities',
-      version: '1.0.0',
-    },
-    servers: [
-      {
-        url: 'https://api.mikeodnis.dev/v1/core',
-        description: 'Production',
-      },
-    ],
-    tags: [
-      { name: 'health', description: 'Health check endpoints' },
-      { name: 'users', description: 'User management' },
-    ],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-        },
-      },
-    },
-  },
-});
-
-await fastify.register(swaggerUi, {
-  routePrefix: '/v1/core/docs',
-  uiConfig: {
-    docExpansion: 'list',
-    deepLinking: true,
-  },
-});
-
-// Routes
-await fastify.register(healthRoutes, { prefix: '/v1/core' });
-await fastify.register(userRoutes, { prefix: '/v1/core' });
-
-// Start server
-const start = async () => {
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}, flushing telemetry and shutting down core service...`);
   try {
-    const port = parseInt(process.env.PORT || '3000', 10);
-    await fastify.listen({ port, host: '0.0.0.0' });
-    console.log(`🚀 Core service listening on port ${port}`);
+    const provider = trace.getTracerProvider() as {
+      forceFlush?: () => Promise<void>;
+      shutdown?: () => Promise<void>;
+    };
+    if (typeof provider.forceFlush === 'function') {
+      await provider.forceFlush();
+    }
+    if (typeof provider.shutdown === 'function') {
+      await provider.shutdown();
+    }
+    await server.stop(true);
+    await db.close();
+    process.exit(0);
   } catch (err) {
-    fastify.log.error(err);
+    console.error('Error during shutdown:', err);
     process.exit(1);
   }
-};
+}
 
-start();
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));

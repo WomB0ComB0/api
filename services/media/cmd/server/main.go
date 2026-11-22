@@ -9,103 +9,89 @@ import (
 	"syscall"
 	"time"
 
+	"api/media/internal/adapter/cloudflare"
+	"api/media/internal/adapter/postgres"
+	"api/media/internal/adapter/r2"
+	"api/media/internal/adapter/telemetry"
+	httpapi "api/media/internal/api/http"
+	"api/media/internal/application"
 	"api/media/internal/config"
-	"api/media/internal/handlers"
-	"api/media/internal/middleware"
-	"api/media/internal/storage"
-	"api/media/internal/telemetry"
+	"api/media/internal/domain/event"
+	"api/media/internal/domain/port"
 
-	"github.com/go-chi/chi/v5"
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
-	"github.com/go-chi/httprate"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	// Initialize logger
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	if os.Getenv("GO_ENV") == "development" {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 
-	// Load config
+	// 1. Load & validate configuration
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("Invalid configuration")
+	}
 
-	// Initialize telemetry
-	shutdown, err := telemetry.InitTelemetry(cfg.OtelEndpoint, "media-service")
+	// 2. Initialize secondary adapters (Telemetry, R2, PostgreSQL, Cloudflare CDN)
+	shutdownTelemetry, err := telemetry.InitTelemetry(cfg.OtelEndpoint, "media-service")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize telemetry")
 	}
-	defer shutdown(context.Background())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(ctx)
+	}()
 
-	// Initialize storage client
-	s3Client, err := storage.NewS3Client(context.Background(), cfg)
+	objectStore, err := r2.NewObjectStore(context.Background(), cfg)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize S3 client")
+		log.Fatal().Err(err).Msg("Failed to initialize R2 object store")
 	}
 
-	// Initialize router
-	r := chi.NewRouter()
+	var assetRepo port.AssetRepository
+	if cfg.DatabaseURL != "" {
+		pgRepo, err := postgres.NewAssetRepository(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to initialize PostgreSQL asset repository")
+		}
+		assetRepo = pgRepo
+		defer pgRepo.Close()
+	} else {
+		log.Warn().Msg("DATABASE_URL not set; asset metadata persistence disabled")
+	}
 
-	// Middleware
-	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
-	r.Use(chimiddleware.Logger)
-	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Timeout(60 * time.Second))
-	r.Use(httprate.LimitByIP(100, 1*time.Minute))
+	signer := cloudflare.NewURLSigner(cfg.SigningSecret)
+	purger := cloudflare.NewCachePurger(cfg.CloudflareZoneID, cfg.CloudflareAPIToken)
 
-	// CORS
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://mikeodnis.dev", "https://www.mikeodnis.dev"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
-		ExposedHeaders:   []string{"X-Request-ID"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	// 3. Wire Domain Event Bus + Subscribers
+	eventBus := event.NewInMemoryEventBus()
+	eventBus.Subscribe(cloudflare.NewAssetDeletedPurgeSubscriber(purger))
 
-	// Routes
-	r.Route("/v1/media", func(r chi.Router) {
-		// Public routes
-		r.Get("/health", handlers.HealthCheck)
-		r.Get("/openapi.json", handlers.OpenAPISpec)
+	// 4. Wire Application Use Case Factory
+	appFactory := application.NewFactory(
+		objectStore,
+		assetRepo,
+		signer,
+		purger,
+		eventBus,
+		cfg.R2PublicURL,
+		cfg.MaxUploadBytes,
+	)
 
-		// Protected routes
-		r.Group(func(r chi.Router) {
-			r.Use(middleware.JWTAuth(cfg.JWTSecret))
-
-			// Upload
-			r.Post("/upload", handlers.Upload(s3Client, cfg))
-
-			// Pre-signed URLs
-			r.Post("/presign", handlers.PresignURL(s3Client, cfg))
-
-			// List assets
-			r.Get("/assets", handlers.ListAssets(s3Client, cfg))
-
-			// Get asset metadata
-			r.Get("/assets/{id}", handlers.GetAsset(s3Client, cfg))
-
-			// Delete asset
-			r.Delete("/assets/{id}", handlers.DeleteAsset(s3Client, cfg))
-		})
-	})
-
-	// Start server
+	// 5. Wire Primary HTTP Adapter
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Handler:      httpapi.NewRouter(appFactory, cfg),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	go func() {
-		log.Info().Msgf("🚀 Media service listening on port %s", cfg.Port)
+		log.Info().Msgf("Media service (Hexagonal) listening on port %s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Server failed")
 		}
@@ -115,14 +101,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Info().Msg("Shutting down server...")
-
+	log.Info().Msg("Shutting down media service...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal().Err(err).Msg("Server forced to shutdown")
 	}
-
-	log.Info().Msg("Server exited")
+	log.Info().Msg("Media service exited cleanly")
 }

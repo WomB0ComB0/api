@@ -1,41 +1,18 @@
-version: '3.9'
-
 services:
   # Traefik API Gateway
   traefik:
     image: traefik:v2.11
     container_name: api-gateway
     restart: unless-stopped
-    command:
-      - "--api.dashboard=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=admin@mikeodnis.dev"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      - "--metrics.prometheus=true"
-      - "--metrics.prometheus.buckets=0.1,0.3,1.0,3.0,10.0"
-      - "--accesslog=true"
-      - "--accesslog.format=json"
-      - "--log.level=INFO"
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080" # Dashboard
+      - "8080:8080" # Dashboard (local dev)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./letsencrypt:/letsencrypt
+      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
-    labels:
-      - "traefik.enable=true"
-      # Dashboard
-      - "traefik.http.routers.dashboard.rule=Host(`api.mikeodnis.dev`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
-      - "traefik.http.routers.dashboard.service=api@internal"
-      - "traefik.http.routers.dashboard.middlewares=auth"
-      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_USER}:${TRAEFIK_DASHBOARD_PASSWORD}"
+      - ./letsencrypt:/letsencrypt
     networks:
       - api-network
 
@@ -45,39 +22,40 @@ services:
     container_name: api-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: api
-      POSTGRES_USER: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-api}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-postgres}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-api}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - api-network
 
-  # Node.js Core Service
+  # Core Service (Bun + Elysia + Auth/JWT/API Keys)
   core-service:
     build:
       context: ./services/core
       dockerfile: Dockerfile
-    container_name: api-core
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: ${DATABASE_URL}
-      JWT_SECRET: ${JWT_SECRET}
+      PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/api}
+      JWT_SECRET: ${JWT_SECRET:-development-jwt-secret-change-me-32chars!}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_TTL_DAYS: ${JWT_REFRESH_TTL_DAYS:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       OTEL_SERVICE_NAME: core-service
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.core.rule=Host(`api.mikeodnis.dev`) && PathPrefix(`/v1/core`)"
-      - "traefik.http.routers.core.entrypoints=websecure"
-      - "traefik.http.routers.core.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.core.middlewares=core-ratelimit,jwt-auth"
+      - "traefik.http.routers.core.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`/v1/core`)"
+      - "traefik.http.routers.core.middlewares=core-ratelimit,cors@file,compress@file"
       - "traefik.http.middlewares.core-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.core-ratelimit.ratelimit.burst=50"
       - "traefik.http.services.core.loadbalancer.server.port=3000"
@@ -87,56 +65,62 @@ services:
     networks:
       - api-network
 
-  # Go Media Service
+  # Go Media Service (R2 + PostgreSQL + cdn.mikeodnis.dev Signed URLs & Cache Purge)
   media-service:
     build:
       context: ./services/media
       dockerfile: Dockerfile
-    container_name: api-media
     restart: unless-stopped
     environment:
       GO_ENV: ${GO_ENV:-development}
-      CLOUDFLARE_R2_ACCOUNT_ID: ${CLOUDFLARE_R2_ACCOUNT_ID}
-      CLOUDFLARE_R2_ACCESS_KEY_ID: ${CLOUDFLARE_R2_ACCESS_KEY_ID}
-      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${CLOUDFLARE_R2_SECRET_ACCESS_KEY}
-      CLOUDFLARE_R2_BUCKET: ${CLOUDFLARE_R2_BUCKET}
-      CLOUDFLARE_R2_PUBLIC_URL: ${CLOUDFLARE_R2_PUBLIC_URL}
-      JWT_SECRET: ${JWT_SECRET}
+      PORT: "8080"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/api}
+      JWT_SECRET: ${JWT_SECRET:-development-jwt-secret-change-me-32chars!}
+      SIGNING_SECRET: ${SIGNING_SECRET:-development-signing-secret-change-me-32b!}
+      CLOUDFLARE_R2_ACCOUNT_ID: ${CLOUDFLARE_R2_ACCOUNT_ID:-}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${CLOUDFLARE_R2_ACCESS_KEY_ID:-}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}
+      CLOUDFLARE_R2_BUCKET: ${CLOUDFLARE_R2_BUCKET:-}
+      CLOUDFLARE_R2_PUBLIC_URL: ${CLOUDFLARE_R2_PUBLIC_URL:-https://cdn.mikeodnis.dev}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       OTEL_SERVICE_NAME: media-service
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.media.rule=Host(`api.mikeodnis.dev`) && PathPrefix(`/v1/media`)"
-      - "traefik.http.routers.media.entrypoints=websecure"
-      - "traefik.http.routers.media.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.media.middlewares=media-ratelimit,jwt-auth"
+      - "traefik.http.routers.media.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`/v1/media`)"
+      - "traefik.http.routers.media.middlewares=media-ratelimit,cors@file,compress@file"
       - "traefik.http.middlewares.media-ratelimit.ratelimit.average=50"
       - "traefik.http.middlewares.media-ratelimit.ratelimit.burst=25"
       - "traefik.http.services.media.loadbalancer.server.port=8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - api-network
 
-  # Hasura GraphQL Engine
+  # Hasura GraphQL Engine (Links API with auto-applied metadata)
   hasura:
-    image: hasura/graphql-engine:v2.38.0
+    image: hasura/graphql-engine:v2.43.0.cli-migrations-v3
     container_name: api-hasura
     restart: unless-stopped
     environment:
-      HASURA_GRAPHQL_DATABASE_URL: ${DATABASE_URL}
+      HASURA_GRAPHQL_DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/api}
+      HASURA_GRAPHQL_METADATA_DIR: /hasura-metadata
       HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
-      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET}
-      HASURA_GRAPHQL_JWT_SECRET: ${HASURA_GRAPHQL_JWT_SECRET}
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-dev-hasura-admin-secret}
+      HASURA_GRAPHQL_JWT_SECRET: ${HASURA_GRAPHQL_JWT_SECRET:-{"type":"HS256","key":"development-jwt-secret-change-me-32chars!"}}
       HASURA_GRAPHQL_UNAUTHORIZED_ROLE: ${HASURA_GRAPHQL_UNAUTHORIZED_ROLE:-anonymous}
       HASURA_GRAPHQL_ENABLE_TELEMETRY: "false"
       HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup, http-log, webhook-log, websocket-log
       HASURA_GRAPHQL_LOG_LEVEL: info
+    volumes:
+      - ./hasura/metadata:/hasura-metadata:ro
     labels:
       - "traefik.enable=true"
-      # GraphQL endpoint
-      - "traefik.http.routers.hasura.rule=Host(`api.mikeodnis.dev`) && PathPrefix(`/v1/links`)"
-      - "traefik.http.routers.hasura.entrypoints=websecure"
-      - "traefik.http.routers.hasura.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.hasura.middlewares=hasura-stripprefix,hasura-ratelimit"
+      - "traefik.http.routers.hasura.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`/v1/links`)"
+      - "traefik.http.routers.hasura.middlewares=hasura-stripprefix,hasura-ratelimit,cors@file"
       - "traefik.http.middlewares.hasura-stripprefix.stripprefix.prefixes=/v1/links"
       - "traefik.http.middlewares.hasura-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.hasura-ratelimit.ratelimit.burst=50"
@@ -155,18 +139,44 @@ services:
     container_name: api-health
     restart: unless-stopped
     environment:
-      SERVICES: core-service:3000,media-service:8080,hasura:8080
+      SERVICES: "core=http://core-service:3000/v1/core/health,media=http://media-service:8080/v1/media/health,hasura=http://hasura:8080/healthz"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.health.rule=Host(`api.mikeodnis.dev`) && Path(`/health`)"
-      - "traefik.http.routers.health.entrypoints=websecure"
-      - "traefik.http.routers.health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.health.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && Path(`/health`)"
       - "traefik.http.services.health.loadbalancer.server.port=8000"
+    networks:
+      - api-network
+
+  # OpenTelemetry Collector (opt-in via: make dev-obs)
+  otel-collector:
+    image: otel/opentelemetry-collector:0.104.0
+    container_name: api-otel
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    environment:
+      ENVIRONMENT: ${NODE_ENV:-development}
+      OTEL_EXPORTER_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT:-jaeger:4317}
+      OTEL_EXPORTER_TOKEN: ${OTEL_EXPORTER_TOKEN:-}
+    networks:
+      - api-network
+
+  # Jaeger Tracing UI (opt-in via: make dev-obs -> http://localhost:16686)
+  jaeger:
+    image: jaegertracing/jaeger:2.1.0
+    container_name: api-jaeger
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports:
+      - "16686:16686" # Jaeger Search UI
     networks:
       - api-network
 
 networks:
   api-network:
+    name: api-network
     driver: bridge
 
 volumes:

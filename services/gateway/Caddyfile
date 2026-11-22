@@ -1,0 +1,49 @@
+{
+	auto_https off
+	admin off
+}
+
+:{$PORT:8080} {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	@gwhealth path /gateway/health
+	handle @gwhealth {
+		respond `{"status":"healthy","service":"gateway"}` 200 {
+			header Content-Type application/json
+		}
+	}
+
+	@health path /health
+	handle @health {
+		reverse_proxy {$HEALTH_UPSTREAM:health-aggregator.railway.internal:8000}
+	}
+
+	@core path /v1/core /v1/core/*
+	handle @core {
+		reverse_proxy {$CORE_UPSTREAM:core-service.railway.internal:3000}
+	}
+
+	@media path /v1/media /v1/media/*
+	handle @media {
+		reverse_proxy {$MEDIA_UPSTREAM:media-service.railway.internal:8080}
+	}
+
+	@links path /v1/links /v1/links/*
+	handle @links {
+		uri strip_prefix /v1/links
+		reverse_proxy {$HASURA_UPSTREAM:hasura.railway.internal:8080}
+	}
+
+	handle {
+		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"]}` 200 {
+			header Content-Type application/json
+		}
+	}
+}

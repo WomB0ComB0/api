@@ -1,279 +1,128 @@
-# Deployment Guide
+# End-to-End Hosting & Deployment Guide
 
-## Prerequisites
+This guide covers deploying the full `api.mikeodnis.dev` + `cdn.mikeodnis.dev` stack end-to-end.
 
-- Docker and Docker Compose installed
-- Domain configured (api.mikeodnis.dev, cdn.mikeodnis.dev)
-- Cloudflare R2 bucket created
-- BetterStack account (optional, for monitoring)
+---
 
-## Initial Setup
+## Shared Secrets (Generate Once)
 
-### 1. Clone and Configure
+Generate cryptographically strong secrets and store them in your secret manager (never commit them):
 
 ```bash
-git clone <your-repo>
-cd api
-cp .env.example .env
-```
-
-### 2. Configure Environment Variables
-
-Edit `.env` with your actual values:
-
-```bash
-# Essential configurations
 JWT_SECRET=$(openssl rand -hex 32)
+SIGNING_SECRET=$(openssl rand -hex 32)
 HASURA_GRAPHQL_ADMIN_SECRET=$(openssl rand -hex 32)
-
-# Cloudflare R2
-CLOUDFLARE_R2_ACCOUNT_ID=your-account-id
-CLOUDFLARE_R2_ACCESS_KEY_ID=your-access-key
-CLOUDFLARE_R2_SECRET_ACCESS_KEY=your-secret-key
-CLOUDFLARE_R2_BUCKET=your-bucket-name
-
-# Database
-DATABASE_URL=postgresql://postgres:yourpassword@postgres:5432/api
 ```
 
-### 3. DNS Configuration
+> **Critical:** `SIGNING_SECRET` must be identical between `media-service` (`api.mikeodnis.dev`) and the Cloudflare Worker (`cdn.mikeodnis.dev`). `JWT_SECRET` must match across `core-service`, `media-service`, and `HASURA_GRAPHQL_JWT_SECRET`.
 
-Point your domains to your server:
+---
 
-```
-A    api.mikeodnis.dev        -> YOUR_SERVER_IP
-A    cdn.mikeodnis.dev        -> YOUR_SERVER_IP (or R2 custom domain)
-```
+## Part 1: Deploy `cdn.mikeodnis.dev` (Cloudflare R2 + Worker)
 
-### 4. Start Services
+From `~/github/prs/cdn/cloudflare-worker`:
 
 ```bash
-# Development
-docker-compose up -d
+# 1. Authenticate Wrangler (one-time interactive login)
+bunx wrangler login
 
-# Production
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 2. Create the R2 bucket (if not already created)
+bunx wrangler r2 bucket create mikeodnis-cdn
+
+# 3. Upload the shared HMAC signing secret
+printf '%s' "$SIGNING_SECRET" | bunx wrangler secret put SIGNING_SECRET
+
+# 4. Run unit tests & deploy the ES Module Worker
+bun test
+bunx wrangler deploy
+
+# 5. Verify live edge health
+curl -fsS https://cdn.mikeodnis.dev/health
 ```
 
-### 5. Verify Deployment
+Make sure `cdn.mikeodnis.dev` is routed in Cloudflare DNS (proxied orange-cloud record or Worker Custom Domain matching `wrangler.jsonc`).
+
+---
+
+## Part 2A: Host `api.mikeodnis.dev` on Railway (Managed PaaS — Recommended)
+
+Railway runs each container on private networking (`*.railway.internal`), with `services/gateway` (Caddy) as the single public ingress mapped to `api.mikeodnis.dev`.
+
+### 1. Create Project & Provision PostgreSQL
 
 ```bash
-# Check all services are healthy
-curl https://api.mikeodnis.dev/health
-
-# Check individual services
-curl https://api.mikeodnis.dev/v1/core/health
-curl https://api.mikeodnis.dev/v1/media/health
-curl https://api.mikeodnis.dev/v1/links/healthz
+cd ~/github/prs/api
+railway init -n api-mikeodnis-dev
+railway add --database postgres
 ```
 
-## Service URLs
-
-- **Gateway Dashboard**: https://api.mikeodnis.dev/dashboard
-- **Core API Docs**: https://api.mikeodnis.dev/v1/core/docs
-- **Media API Spec**: https://api.mikeodnis.dev/v1/media/openapi.json
-- **Hasura Console**: https://api.mikeodnis.dev/v1/links/console
-- **GraphQL Playground**: https://api.mikeodnis.dev/v1/links/graphql
-
-## Hasura Setup
-
-### 1. Apply Metadata
+Initialize the `core`, `media`, and `links` schemas against the Railway Postgres URL:
 
 ```bash
-docker exec -it api-hasura hasura-cli metadata apply \
-  --admin-secret YOUR_HASURA_SECRET \
-  --endpoint http://localhost:8080
+DATABASE_URL="$(railway variables --service Postgres --json | jq -r '.DATABASE_URL')" ./scripts/db-init.sh
 ```
 
-### 2. Run Migrations
+### 2. Deploy the 5 Services
+
+Create each service pointing to this repository with its corresponding `railway.toml` path:
+
+| Railway Service | Config File (`RAILWAY_CONFIG_FILE`) | Internal Port | Required Environment Variables |
+| :--- | :--- | :---: | :--- |
+| `core-service` | `services/core/railway.toml` | `3000` | `NODE_ENV=production`, `PORT=3000`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `JWT_SECRET` |
+| `media-service` | `services/media/railway.toml` | `8080` | `GO_ENV=production`, `PORT=8080`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `JWT_SECRET`, `SIGNING_SECRET`, `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_R2_BUCKET=mikeodnis-cdn`, `CLOUDFLARE_R2_PUBLIC_URL=https://cdn.mikeodnis.dev`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN` |
+| `hasura` | `hasura/railway.toml` | `8080` | `HASURA_GRAPHQL_DATABASE_URL=${{Postgres.DATABASE_URL}}`, `HASURA_GRAPHQL_ADMIN_SECRET`, `HASURA_GRAPHQL_JWT_SECRET={"type":"HS256","key":"<JWT_SECRET>"}`, `HASURA_GRAPHQL_ENABLE_CONSOLE=false`, `HASURA_GRAPHQL_ENABLE_ALLOWLIST=true` |
+| `health-aggregator` | `services/health/railway.toml` | `8000` | `PORT=8000`, `SERVICES=core=http://core-service.railway.internal:3000/v1/core/health,media=http://media-service.railway.internal:8080/v1/media/health,hasura=http://hasura.railway.internal:8080/healthz` |
+| `gateway` (Public) | `services/gateway/railway.toml` | `8080` | `CORE_UPSTREAM=core-service.railway.internal:3000`, `MEDIA_UPSTREAM=media-service.railway.internal:8080`, `HASURA_UPSTREAM=hasura.railway.internal:8080`, `HEALTH_UPSTREAM=health-aggregator.railway.internal:8000` |
+
+### 3. Attach Custom Domain
+
+In Railway → `gateway` service → **Settings → Networking → Custom Domain**:
+- Add `api.mikeodnis.dev` and create the CNAME record Railway provides in Cloudflare DNS.
+- Verify end-to-end:
+  ```bash
+  ./scripts/test-api.sh https://api.mikeodnis.dev
+  ```
+
+---
+
+## Part 2B: Host `api.mikeodnis.dev` on a Single VPS (Docker Compose + Traefik)
+
+Ideal for Hetzner / DigitalOcean / Oracle Cloud ($5–$20/mo):
 
 ```bash
-docker exec -it api-hasura hasura-cli migrate apply \
-  --admin-secret YOUR_HASURA_SECRET \
-  --endpoint http://localhost:8080
+# 1. On the VPS (Ubuntu / Arch / Debian with Docker + Compose v2)
+git clone https://github.com/WomB0ComB0/api.git /opt/api
+cd /opt/api
+
+# 2. Generate .env and fill in CLOUDFLARE_R2_* + CLOUDFLARE_ZONE_ID/API_TOKEN
+./setup.sh
+nano .env
+
+# 3. Point DNS A record: api.mikeodnis.dev -> <VPS_PUBLIC_IP> (ports 80 & 443 open)
+
+# 4. Boot production stack (Traefik + Let's Encrypt TLS + 2x Core + 2x Media + Hasura + Postgres + Health)
+make prod
+
+# 5. Verify all endpoints
+./scripts/test-api.sh https://api.mikeodnis.dev
 ```
 
-### 3. Enable Allow List
+---
 
-The allow list is automatically applied via metadata. Only pre-approved queries can be executed in production.
-
-## SSL/TLS Configuration
-
-Traefik automatically provisions Let's Encrypt certificates. Ensure:
-
-1. Ports 80 and 443 are open
-2. Domain DNS is correctly configured
-3. `letsencrypt/acme.json` is writable (chmod 600)
+## Post-Deploy Smoke Test (End-to-End API ↔ CDN)
 
 ```bash
-mkdir -p letsencrypt
-chmod 600 letsencrypt/acme.json
+# 1. Register & get JWT
+TOKEN=$(curl -fsS -X POST https://api.mikeodnis.dev/v1/core/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@mikeodnis.dev","name":"Mike","password":"StrongPassword123!"}' | jq -r '.access_token')
+
+# 2. Upload a private asset & receive signed cdn.mikeodnis.dev URL
+SIGNED_URL=$(curl -fsS -X POST https://api.mikeodnis.dev/v1/media/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F 'visibility=private' \
+  -F 'file=@README.md' | jq -r '.url')
+
+# 3. Download through cdn.mikeodnis.dev Worker (validates HMAC signature)
+curl -fsS "$SIGNED_URL" | head -n 5
 ```
-
-## Scaling
-
-### Horizontal Scaling
-
-Scale individual services:
-
-```bash
-docker-compose up -d --scale core-service=3 --scale media-service=2
-```
-
-Traefik automatically load balances across instances.
-
-### Vertical Scaling
-
-Adjust resource limits in `docker-compose.prod.yml`.
-
-## Monitoring
-
-### BetterStack Integration
-
-1. Create source in BetterStack
-2. Add source token to `.env`:
-
-```bash
-BETTERSTACK_SOURCE_TOKEN=your-token
-```
-
-3. Health checks are sent via GitHub Actions after each deployment
-
-### Prometheus Metrics
-
-All services expose metrics at `/metrics`:
-
-```bash
-curl https://api.mikeodnis.dev/v1/core/metrics
-```
-
-### Log Aggregation
-
-Structured JSON logs from all services:
-
-```bash
-docker-compose logs -f --tail=100 core-service
-docker-compose logs -f --tail=100 media-service
-```
-
-## Backup and Recovery
-
-### Database Backup
-
-```bash
-docker exec api-postgres pg_dump -U postgres api > backup-$(date +%Y%m%d).sql
-```
-
-### Restore Database
-
-```bash
-cat backup-20240101.sql | docker exec -i api-postgres psql -U postgres api
-```
-
-### R2 Backup
-
-R2 objects are automatically versioned. Enable lifecycle rules in Cloudflare dashboard.
-
-## Troubleshooting
-
-### Services Not Starting
-
-```bash
-# Check logs
-docker-compose logs -f
-
-# Verify network
-docker network inspect api_api-network
-```
-
-### Database Connection Issues
-
-```bash
-# Test connection
-docker exec -it api-postgres psql -U postgres -d api -c "SELECT 1"
-```
-
-### SSL Certificate Issues
-
-```bash
-# Remove old certificates
-rm -rf letsencrypt/acme.json
-docker-compose restart traefik
-```
-
-### Rate Limiting
-
-Adjust per-service rate limits in `docker-compose.yml`:
-
-```yaml
-- "traefik.http.middlewares.core-ratelimit.ratelimit.average=200"
-```
-
-## Security Checklist
-
-- [ ] Change default passwords in `.env`
-- [ ] Rotate JWT secrets quarterly
-- [ ] Enable Cloudflare proxy for DDoS protection
-- [ ] Configure firewall (UFW/iptables)
-- [ ] Enable fail2ban for SSH
-- [ ] Regular security scans (GitHub Actions)
-- [ ] Monitor logs for suspicious activity
-- [ ] Keep dependencies updated
-
-## Performance Optimization
-
-### Database
-
-```sql
--- Add indexes for frequently queried fields
-CREATE INDEX CONCURRENTLY idx_users_email ON core.users(email);
-
--- Enable query plan caching
-ALTER SYSTEM SET plan_cache_mode = 'force_generic_plan';
-```
-
-### Traefik
-
-```yaml
-# Enable compression
-- "--entrypoints.websecure.http.middlewares=compress@file"
-```
-
-### R2 CDN
-
-Configure caching headers:
-
-```go
-ContentType: aws.String(handler.Header.Get("Content-Type")),
-CacheControl: aws.String("public, max-age=31536000, immutable"),
-```
-
-## Maintenance
-
-### Update Services
-
-```bash
-git pull origin main
-docker-compose pull
-docker-compose up -d --remove-orphans
-docker system prune -f
-```
-
-### Database Migrations
-
-```bash
-# Create migration
-docker exec -it api-hasura hasura-cli migrate create "add_users_table" \
-  --admin-secret YOUR_SECRET
-
-# Apply migration
-docker exec -it api-hasura hasura-cli migrate apply \
-  --admin-secret YOUR_SECRET
-```
-
-## Support
-
-For issues or questions:
-- Check logs: `docker-compose logs -f`
-- Health status: `curl https://api.mikeodnis.dev/health`
-- GitHub Issues: [Link to your repo]

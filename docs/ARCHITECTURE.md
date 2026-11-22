@@ -1,391 +1,98 @@
-# Architecture Overview
+# Architecture Deep-Dive — `api.mikeodnis.dev` & `cdn.mikeodnis.dev`
 
-## System Design
+## 1. High-Level Topology
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Cloudflare (DDoS, WAF)                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Traefik Gateway (api.mikeodnis.dev)         │
-│  • SSL Termination                                           │
-│  • JWT Validation                                            │
-│  • Rate Limiting                                             │
-│  • Request Routing                                           │
-│  • Load Balancing                                            │
-└──────┬─────────────┬────────────────┬────────────────────────┘
-       │             │                │
-       ▼             ▼                ▼
-┌──────────┐  ┌──────────┐    ┌──────────────┐
-│  Core    │  │  Media   │    │   Hasura     │
-│ Service  │  │ Service  │    │  GraphQL     │
-│          │  │          │    │              │
-│ Node.js  │  │    Go    │    │ /v1/links/*  │
-│ /v1/core │  │/v1/media │    └──────┬───────┘
-└────┬─────┘  └────┬─────┘           │
-     │             │                 │
-     └─────────────┴─────────────────┘
-                   │
-                   ▼
-         ┌────────────────────┐
-         │    PostgreSQL      │
-         │  • core schema     │
-         │  • media schema    │
-         │  • links schema    │
-         └────────────────────┘
+```mermaid
+flowchart TB
+    Users["Browsers / Next.js / CLI"]
 
-┌─────────────────────────────────────────────────────────────┐
-│                  Cloudflare R2 (cdn.mikeodnis.dev)           │
-│  • Media Storage                                             │
-│  • Global CDN                                                │
-│  • Public/Private Buckets                                    │
-└─────────────────────────────────────────────────────────────┘
+    subgraph Cloudflare["Cloudflare Edge"]
+        WAF["Cloudflare DNS + WAF"]
+        CDN["cdn.mikeodnis.dev Worker (wrangler.jsonc)"]
+        R2[("Cloudflare R2 (mikeodnis-cdn)")]
+    end
+
+    subgraph Platform["api.mikeodnis.dev"]
+        GW["Gateway: Traefik (VPS) or Caddy (Railway/Fly)"]
+        Core["core-service :3000 (Bun + Elysia)"]
+        Media["media-service :8080 (Go Hexagonal)"]
+        Hasura["hasura :8080 (GraphQL v2.43)"]
+        Health["health-aggregator :8000 (Python 3.12)"]
+        PG[("PostgreSQL 16")]
+        Jaeger["OTel Collector -> Jaeger :16686"]
+    end
+
+    Users --> WAF --> GW
+    Users --> CDN --> R2
+    GW --> Core & Media & Hasura & Health
+    Core & Media & Hasura --> PG
+    Media --> R2
+    Media -.->|"Purge API"| Cloudflare
+    Core & Media -.-> Jaeger
 ```
 
-## Technology Stack
+---
 
-### Gateway Layer
-- **Traefik v2.11**: API Gateway with automatic service discovery
-- **Let's Encrypt**: Automated SSL/TLS certificate management
-- **Docker Labels**: Dynamic routing configuration
+## 2. Shared Security & CDN Contract (`api` ↔ `cdn`)
 
-### Services
+| Shared Primitive | Owner | Consumers | Contract |
+| :--- | :--- | :--- | :--- |
+| `JWT_SECRET` (HS256, ≥32B) | `core-service` issues | `core-service`, `media-service`, `hasura` | JWT contains `sub`, `email`, `role`, and `https://hasura.io/jwt/claims` |
+| `SIGNING_SECRET` (≥32B) | `media-service` signs | `cdn-worker` verifies | `HMAC-SHA256("<path>:<unix_exp>")` encoded as unpadded Base64URL, compared in constant time |
+| Public R2 Prefix | `media-service` writes | `cdn-worker` serves | Key `assets/<user_id>/<hash><ext>` → `https://cdn.mikeodnis.dev/assets/...` (`immutable`, 1y TTL) |
+| Private R2 Prefix | `media-service` writes | `cdn-worker` serves | Key `private/<user_id>/<hash><ext>` → `https://cdn.mikeodnis.dev/private/...?exp=<ts>&sig=<mac>` (`private`, 1h TTL) |
 
-#### Core Service (Node.js/TypeScript)
-- **Framework**: Fastify (high-performance HTTP server)
-- **Validation**: Zod schemas
-- **Documentation**: OpenAPI/Swagger
-- **Database**: PostgreSQL via pg driver
-- **Telemetry**: OpenTelemetry
+---
 
-**Responsibilities:**
-- User management
-- Shared business logic
-- Utilities for Next.js monorepo
+## 3. Go Media Service — Hexagonal Layer Rules
 
-#### Media Service (Go)
-- **Router**: Chi
-- **Storage**: AWS SDK v2 (Cloudflare R2)
-- **Streaming**: Native Go HTTP
-- **Telemetry**: OpenTelemetry
+Enforced automatically by [architecture_test.go](file:///home/wombocombo/github/prs/api/services/media/architecture_test.go):
 
-**Responsibilities:**
-- File uploads (multipart)
-- Pre-signed URL generation
-- Asset management
-- S3-compatible operations
+| Layer | Path | Allowed Internal Imports | Forbidden Imports |
+| :--- | :--- | :--- | :--- |
+| **Domain** | `internal/domain/**` | `domain/**`, `pkg/apperr` | `application`, `adapter`, `api`, `pgx`, `aws-sdk-go-v2`, `chi`, `net/http` |
+| **Application** | `internal/application/**` | `domain/**`, `application/**`, `pkg/apperr` | `adapter`, `api`, `pgx`, `aws-sdk-go-v2`, `chi` |
+| **Primary Adapter (API)** | `internal/api/**` | `application/**`, `domain/**`, `config`, `pkg/apperr` | `adapter`, `pgx`, `aws-sdk-go-v2` |
+| **Secondary Adapters** | `internal/adapter/**` | `domain/**`, `config`, `pkg/apperr` | `api` |
+| **Composition Root** | `cmd/server/main.go` | All layers (wires DI + event bus) | — |
 
-#### Links Service (Hasura GraphQL)
-- **Engine**: Hasura v2.38
-- **Security**: JWT validation, role-based access
-- **Features**: Allow-list, query caching
+```mermaid
+flowchart TD
+    Main["cmd/server/main.go (Composition Root)"]
+    API["internal/api/http (Chi Router, JWT Middleware, Thin Handlers)"]
+    App["internal/application (Factory + Use Cases)"]
+    Dom["internal/domain (Asset Aggregate, Value Objects, EventBus, Ports)"]
+    Adp["internal/adapter (Postgres pgx, Cloudflare R2, URLSigner, CachePurger, OTel)"]
 
-**Responsibilities:**
-- Link shortening
-- Click tracking
-- Analytics
-- Real-time subscriptions
-
-### Data Layer
-- **Database**: PostgreSQL 16
-- **Schemas**: Isolated per service (core, media, links)
-- **Storage**: Cloudflare R2 (S3-compatible)
-
-### Observability
-- **Traces**: OpenTelemetry → OTLP collector
-- **Logs**: Structured JSON to stdout
-- **Metrics**: Prometheus format
-- **Monitoring**: BetterStack
-
-## Design Principles
-
-### 1. Gateway-First Architecture
-
-All external traffic flows through Traefik, which provides:
-- Single entry point for security
-- Centralized rate limiting
-- Automatic SSL/TLS
-- Service discovery via Docker labels
-
-### 2. Polyglot Services
-
-Each service uses the best tool for its domain:
-- **Node.js**: Fast iteration, shared types with frontend
-- **Go**: High-performance I/O, concurrency
-- **Hasura**: Instant GraphQL API with permissions
-
-### 3. OpenAPI-First
-
-All REST services expose OpenAPI specs:
-- `/v1/core/openapi.json`
-- `/v1/media/openapi.json`
-
-Benefits:
-- Client code generation
-- API documentation
-- Contract testing
-
-### 4. Stable URLs
-
-Service paths are decoupled from implementation:
-- `/v1/core/*` can be Node, Deno, or Bun
-- `/v1/media/*` can be Go, Rust, or Zig
-- Version in path (`/v1/`) for major changes
-
-### 5. Defense in Depth
-
-Multiple security layers:
-1. **Cloudflare**: DDoS, WAF, bot protection
-2. **Traefik**: Rate limiting, JWT validation
-3. **Service**: Input validation, authorization
-4. **Database**: Row-level security (Hasura)
-
-## Request Flow
-
-### Authenticated Request
-
-```
-Client
-  │
-  ├─ HTTPS Request + JWT
-  │
-  ▼
-Cloudflare (DDoS protection)
-  │
-  ▼
-Traefik Gateway
-  │
-  ├─ TLS Termination
-  ├─ JWT Validation (middleware)
-  ├─ Rate Limit Check (per-route)
-  │
-  ▼
-Service (Core/Media/Hasura)
-  │
-  ├─ Input Validation
-  ├─ Business Logic
-  ├─ Database Query
-  │
-  ▼
-PostgreSQL / R2
-  │
-  ▼
-Response (JSON)
+    Main --> API
+    Main --> App
+    Main --> Adp
+    API --> App
+    API --> Dom
+    App --> Dom
+    Adp --> Dom
 ```
 
-### File Upload Flow
+---
 
-```
-Client
-  │
-  ├─ 1. POST /v1/media/presign
-  │    (Get pre-signed URL)
-  │
-  ▼
-Media Service
-  │
-  ├─ Generate S3 presigned URL
-  │
-  ▼
-Client
-  │
-  ├─ 2. PUT <presigned-url>
-  │    (Direct upload to R2)
-  │
-  ▼
-Cloudflare R2
-  │
-  ├─ Store file
-  │
-  ▼
-Client
-  │
-  ├─ 3. File available at:
-  │    https://cdn.mikeodnis.dev/uploads/...
-```
+## 4. Core Service — Elysia Best Practices
 
-## Scalability
+- **Feature Modules**: `src/modules/{utility,health,auth,users}` each separate `model.ts` (TypeBox `t` schemas + `UnwrapSchema`), `service.ts` (pure business logic decoupled from Elysia `Context`), and `index.ts` (Elysia controller).
+- **Macros**: Named, scoped macros (`auth: true`, `admin: true`) in `src/plugins/auth.ts` eliminate repetitive guard checks and propagate non-null `authUser` types and OpenAPI security requirements automatically.
+- **Typed Responses**: Every route uses `return status(code, payload)` with explicit response schemas for end-to-end **Eden Treaty** (`@elysiajs/eden`) type safety and OpenAPI 3.1 generation.
+- **Production Binary**: Built via `bun build --compile --minify-whitespace --minify-syntax --target bun --external pg` (retaining function names for OpenTelemetry spans and keeping `pg` external for DB auto-instrumentation).
 
-### Horizontal Scaling
+---
 
-Services are stateless and can scale independently:
+## 5. N+1-Free Query Architecture
 
-```bash
-docker-compose up -d --scale core-service=5 --scale media-service=3
-```
-
-Traefik automatically load balances across instances.
-
-### Vertical Scaling
-
-Resource limits in `docker-compose.prod.yml`:
-
-```yaml
-deploy:
-  resources:
-    limits:
-      cpus: '2'
-      memory: 2G
-```
-
-### Database Scaling
-
-- **Read Replicas**: Configure multiple PostgreSQL instances
-- **Connection Pooling**: Built into each service
-- **Caching**: Hasura query caching
-
-### CDN Scaling
-
-Cloudflare R2 + CDN handles global distribution automatically.
-
-## Resilience
-
-### Health Checks
-
-All services expose `/health` endpoints:
-- Liveness: Is the process running?
-- Readiness: Can it serve traffic?
-
-Docker automatically restarts unhealthy containers.
-
-### Graceful Shutdown
-
-Services handle SIGTERM:
-1. Stop accepting new requests
-2. Complete in-flight requests
-3. Close database connections
-4. Exit
-
-### Circuit Breaking
-
-Traefik can retry failed requests and route around unhealthy instances.
-
-### Backups
-
-- **Database**: Automated daily backups via pg_dump
-- **R2**: Object versioning enabled
-- **Metadata**: Hasura metadata in Git
-
-## Security
-
-### Authentication
-
-JWT tokens with HS256:
-```json
-{
-  "sub": "user-id",
-  "email": "user@example.com",
-  "exp": 1234567890
-}
-```
-
-Validated at gateway (Traefik) and service levels.
-
-### Authorization
-
-- **Core/Media**: Application-level checks
-- **Hasura**: Row-level security via permissions
-
-### Secrets Management
-
-All secrets via environment variables:
-- Never committed to Git
-- Loaded from `.env` (Docker Compose)
-- Or from secrets manager (production)
-
-### Rate Limiting
-
-Per-route limits at gateway:
-- `/v1/core/*`: 100 req/min
-- `/v1/media/*`: 50 req/min
-- `/v1/links/*`: 100 req/min
-
-### HTTPS Only
-
-- TLS 1.2+ required
-- Automatic HTTP → HTTPS redirect
-- HSTS headers
-
-## Monitoring
-
-### Metrics
-
-Prometheus endpoints on all services:
-- Request latency (p50, p95, p99)
-- Error rates
-- Resource usage
-
-### Traces
-
-OpenTelemetry distributed tracing:
-- Trace requests across services
-- Identify bottlenecks
-- Debug failures
-
-### Logs
-
-Structured JSON logs:
-```json
-{
-  "level": "info",
-  "msg": "Request completed",
-  "method": "POST",
-  "path": "/v1/core/users",
-  "status": 201,
-  "duration_ms": 45,
-  "request_id": "abc-123"
-}
-```
-
-### Alerts
-
-BetterStack monitors:
-- Service health endpoints
-- Response times
-- Error rates
-- Certificate expiration
-
-## Cost Optimization
-
-### Cloudflare R2
-- $0.015/GB storage
-- $0 egress (vs S3)
-- Free tier: 10GB storage
-
-### Compute
-- Single VPS for low-medium traffic
-- Scale horizontally as needed
-- Spot instances for non-critical workloads
-
-### Database
-- Shared PostgreSQL instance
-- Separate schemas per service
-- Consider managed DB for production
-
-## Future Enhancements
-
-### Message Queue
-Add RabbitMQ/Redis for:
-- Async processing
-- Event-driven architecture
-- Webhook delivery
-
-### Service Mesh
-Consider Linkerd/Istio for:
-- mTLS between services
-- Advanced traffic management
-- Observability
-
-### Multi-Region
-Deploy to multiple regions:
-- Route53 geo-routing
-- Regional R2 buckets
-- Read replicas per region
-
-### Caching
-Add Redis for:
-- Session storage
-- API response caching
-- Rate limit counters
+| Operation | Service | Query Pattern | DB Roundtrips |
+| :--- | :--- | :--- | :---: |
+| Register user + refresh token | Core | Single atomic CTE (`WITH created_user, created_token`) | **1** |
+| Refresh token rotation | Core | Single atomic CTE (`WITH revoked, inserted`) — race-free | **1** |
+| API key authentication | Core | Single atomic `UPDATE core.api_keys ... FROM core.users ... RETURNING` | **1** |
+| List users (paginated + total) | Core | Single `SELECT ..., COUNT(*) OVER()` using `idx_users_created_at` | **1** |
+| List API keys | Core | Single `SELECT` using partial index `idx_api_keys_user_active` | **1** |
+| List media assets (paginated + total) | Media | Single `SELECT ..., COUNT(*) OVER()` using `idx_assets_user_created` | **1** |
+| Batch lookup media assets | Media | Single `SELECT ... WHERE id = ANY($1::uuid[])` | **1** |
+| Links & click analytics | Hasura | Single compiled lateral-join SQL query using `idx_links_user_created` & `idx_clicks_link_clicked` | **1** |
