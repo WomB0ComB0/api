@@ -5,9 +5,19 @@ import { Elysia } from 'elysia';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
+import { ensureSchema } from './schema.js';
 
 const config = loadConfig();
 const db = createDatabase(config.databaseUrl);
+
+try {
+  await ensureSchema(db);
+  console.log('Database schema verified/initialized');
+} catch (err) {
+  console.error('Failed to initialize database schema:', err);
+  process.exit(1);
+}
+
 const coreApp = buildApp({ config, db });
 
 const server = config.otelEndpoint

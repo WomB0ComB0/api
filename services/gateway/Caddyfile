@@ -15,9 +15,8 @@
 
 	@gwhealth path /gateway/health
 	handle @gwhealth {
-		respond `{"status":"healthy","service":"gateway"}` 200 {
-			header Content-Type application/json
-		}
+		header Content-Type application/json
+		respond `{"status":"healthy","service":"gateway"}` 200
 	}
 
 	@health path /health
@@ -42,8 +41,7 @@
 	}
 
 	handle {
-		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"]}` 200 {
-			header Content-Type application/json
-		}
+		header Content-Type application/json
+		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"]}` 200
 	}
 }

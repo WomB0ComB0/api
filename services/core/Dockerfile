@@ -10,17 +10,11 @@ COPY src ./src
 ENV NODE_ENV=production
 RUN bun run typecheck && bun run build
 
-FROM oven/bun:1-alpine AS prod-deps
-WORKDIR /app
-COPY package.json bun.lock* ./
-RUN bun install --production --frozen-lockfile || bun install --production
-
 FROM oven/bun:1-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 COPY --from=build /app/dist/server ./server
-COPY --from=prod-deps /app/node_modules ./node_modules
 
 USER bun
 EXPOSE 3000
