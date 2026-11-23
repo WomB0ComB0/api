@@ -1,3 +1,4 @@
+import { containsBidiControls } from '@resq-systems/security/unicode';
 import { Elysia, status, t } from 'elysia';
 import type { AppConfig } from '../../config.js';
 import type { Database } from '../../db.js';
@@ -14,6 +15,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
     .post(
       '/register',
       async ({ body, jwt }) => {
+        if (containsBidiControls(body.name) || containsBidiControls(body.email)) {
+          return status(400, { error: 'Input contains disallowed bidirectional control characters' });
+        }
         const result = await service.register(body, (p) =>
           jwt.sign(p as Parameters<typeof jwt.sign>[0])
         );
@@ -26,6 +30,7 @@ export function createAuthModule(db: Database, config: AppConfig) {
         body: AuthModel.registerBody,
         response: {
           201: AuthModel.registerResponse,
+          400: AuthModel.error,
           409: AuthModel.error,
         },
         detail: {
@@ -122,6 +127,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
     .post(
       '/api-keys',
       async ({ authUser, body }) => {
+        if (containsBidiControls(body.name)) {
+          return status(400, { error: 'API key name contains disallowed bidirectional control characters' });
+        }
         const created = await service.createApiKey(authUser.id, body);
         return status(201, created);
       },
@@ -130,6 +138,7 @@ export function createAuthModule(db: Database, config: AppConfig) {
         body: AuthModel.createApiKeyBody,
         response: {
           201: AuthModel.createApiKeyResponse,
+          400: AuthModel.error,
           401: AuthModel.error,
         },
         detail: {

@@ -537,4 +537,29 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(adminList.data?.total).toBe(25);
     expect(db.getQueryCount()).toBe(1);
   });
+
+  test('blocks Trojan Source bidi controls and neutralizes CWE-117 log injection via @resq-systems/security', async () => {
+    const db = createInMemoryDb();
+    const app = buildApp({ config: testConfig, db });
+    const api = treaty(app);
+
+    // Trojan Source RLO character U+202E must be rejected with 400
+    const bidiReg = await api.v1.core.auth.register.post({
+      email: 'bidi@example.com',
+      name: 'Alice\u202EAdmin',
+      password: 'StrongPassword123!',
+    });
+    expect(bidiReg.status).toBe(400);
+
+    // ANSI escape log injection in X-Request-ID must be neutralized by encodeLogValue
+    const res = await app.handle(
+      new Request('http://localhost/v1/core/health', {
+        headers: { 'x-request-id': 'req-123\u001b[31mFAKE' },
+      })
+    );
+    expect(res.status).toBe(200);
+    const echoedId = res.headers.get('x-request-id') ?? '';
+    expect(echoedId).not.toContain('\u001b');
+    expect(echoedId).toContain('req-123');
+  });
 });

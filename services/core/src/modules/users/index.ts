@@ -1,3 +1,4 @@
+import { containsBidiControls } from '@resq-systems/security/unicode';
 import { Elysia, status, t } from 'elysia';
 import type { AppConfig } from '../../config.js';
 import type { Database } from '../../db.js';
@@ -60,6 +61,9 @@ export function createUsersModule(db: Database, config: AppConfig) {
         if (authUser.role !== 'admin' && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });
         }
+        if (body.name && containsBidiControls(body.name)) {
+          return status(400, { error: 'Name contains disallowed bidirectional control characters' });
+        }
         const updated = await service.updateName(params.id, body.name);
         if (!updated) {
           return status(404, { error: 'User not found' });
@@ -72,6 +76,7 @@ export function createUsersModule(db: Database, config: AppConfig) {
         body: UsersModel.updateBody,
         response: {
           200: UsersModel.user,
+          400: UsersModel.error,
           401: UsersModel.error,
           403: UsersModel.error,
           404: UsersModel.error,
