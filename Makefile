@@ -2,7 +2,7 @@
 
 COMPOSE := docker compose
 
-.PHONY: help dev dev-obs prod stop clean logs test test-core test-media test-health build rebuild ps health db-backup db-restore db-shell scale-core scale-media install-core install-media lint-core lint-media format-media init
+.PHONY: help dev dev-obs prod stop clean logs test test-core test-media test-health typecheck typecheck-core typecheck-media typecheck-health build rebuild ps health db-backup db-restore db-shell scale-core scale-media install-core install-media lint-core lint-media format-media init
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -34,16 +34,27 @@ logs: ## Tail logs from all services
 logs-%: ## Tail logs from specific service (e.g., make logs-core-service)
 	$(COMPOSE) logs -f --tail=100 $*
 
-test-core: ## Run tests and typecheck for core service
-	cd services/core && bun test && bun run typecheck
+test-core: ## Run strict typecheck and tests for core service
+	cd services/core && bun run typecheck && bun test
 
-test-media: ## Run tests and vet for media service
-	cd services/media && go vet ./... && go test -race -v ./...
+test-media: ## Run vet, staticcheck, and race tests for media service
+	cd services/media && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@latest ./... && go test -race -v ./...
 
-test-health: ## Run tests for health aggregator
-	cd services/health && python3 -m unittest discover -v
+test-health: ## Run strict mypy/pyright typechecks and tests for health aggregator
+	cd services/health && uvx mypy --config-file pyproject.toml main.py test_main.py && uvx pyright main.py test_main.py && python3 -m unittest discover -v
 
-test: test-core test-media test-health ## Run all service tests
+typecheck-core: ## Strict TypeScript typecheck for core service
+	cd services/core && bun run typecheck
+
+typecheck-media: ## Go vet + staticcheck for media service
+	cd services/media && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
+typecheck-health: ## Strict mypy + pyright typecheck for health aggregator
+	cd services/health && uvx mypy --config-file pyproject.toml main.py test_main.py && uvx pyright main.py test_main.py
+
+typecheck: typecheck-core typecheck-media typecheck-health ## Run strict static checks across all services
+
+test: test-core test-media test-health ## Run all service tests and strict checks
 
 build: ## Build all service images
 	$(COMPOSE) build

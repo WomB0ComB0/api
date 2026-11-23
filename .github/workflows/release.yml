@@ -1,0 +1,308 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'SemVer release tag (e.g. v1.0.0 or v1.0.0-rc.1)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark GitHub Release as prerelease (auto-detected if tag contains "-")'
+        required: false
+        type: boolean
+        default: false
+      deploy_railway:
+        description: 'Also deploy all services to Railway production'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-api
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Validate SemVer Release Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - name: Resolve and validate SemVer tag
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            TAG="$REF_NAME"
+          else
+            TAG="$INPUT_TAG"
+          fi
+
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid SemVer tag '$TAG'. Expected vMAJOR.MINOR.PATCH (optional -prerelease)."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          IS_PRERELEASE="false"
+          if [ "$INPUT_PRERELEASE" = "true" ] || [[ "$TAG" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  verify-and-build:
+    name: Full Strict Verification & Release Artifacts
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+          cache-dependency-path: services/media/go.sum
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Verify Core (strict TS, tests, audit, binary & OpenAPI)
+        working-directory: services/core
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun test
+          bun audit --audit-level=high
+          bun run build
+          bun run export-openapi dist/openapi.json
+
+      - name: Verify Media (vet, staticcheck, govulncheck, race tests & linux/amd64 binary)
+        working-directory: services/media
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go test -race ./...
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o dist/media-linux-amd64 \
+            ./cmd/server
+
+      - name: Verify Health Aggregator (mypy strict, pyright strict & unit tests)
+        working-directory: services/health
+        run: |
+          python -m pip install --quiet mypy pyright
+          mypy --config-file pyproject.toml main.py test_main.py
+          pyright main.py test_main.py
+          python -m unittest discover -v
+
+      - name: Validate Compose & Caddyfile
+        run: |
+          docker compose --env-file .env.example config -q
+          docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker run --rm -v "${{ github.workspace }}/services/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Package versioned release assets & SHA256SUMS
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp services/core/dist/openapi.json "release-assets/core-openapi-${TAG}.json"
+          cp services/media/dist/media-linux-amd64 "release-assets/media-linux-amd64-${TAG}"
+          (cd release-assets && sha256sum "core-openapi-${TAG}.json" "media-linux-amd64-${TAG}" > SHA256SUMS.txt)
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Upload release assets artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: release-assets/
+          retention-days: 7
+
+  publish-images:
+    name: Publish Versioned GHCR Image (${{ matrix.service }})
+    needs: [prepare, verify-and-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: core
+            context: ./services/core
+          - service: media
+            context: ./services/media
+          - service: health
+            context: ./services/health
+          - service: gateway
+            context: ./services/gateway
+          - service: hasura
+            context: ./hasura
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute release image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          flavor: |
+            latest=${{ needs.prepare.outputs.is_prerelease != 'true' }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=sha,prefix=sha-
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy-railway:
+    name: Deploy Release to Railway Production
+    needs: [prepare, publish-images]
+    if: |
+      needs.prepare.outputs.is_prerelease != 'true' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_railway == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://api.mikeodnis.dev
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Deploy all services via Railway CLI
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::notice::Skipping Railway deploy (RAILWAY_TOKEN secret is not configured)."
+            exit 0
+          fi
+
+          npm install -g @railway/cli
+          railway up "services/core" --service "core-service" --environment production --path-as-root --detach --yes
+          railway up "services/media" --service "media-service" --environment production --path-as-root --detach --yes
+          railway up "services/health" --service "health-aggregator" --environment production --path-as-root --detach --yes
+          railway up "services/gateway" --service "gateway" --environment production --path-as-root --detach --yes
+          railway up "hasura" --service "hasura" --environment production --path-as-root --detach --yes
+
+  github-release:
+    name: Create GitHub Release
+    needs: [prepare, verify-and-build, publish-images, deploy-railway]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download packaged release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+          IMAGE_BASE: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          IMAGE_BASE_LOWER=$(echo "$IMAGE_BASE" | tr '[:upper:]' '[:lower:]')
+
+          cat <<EOF > release-notes-footer.md
+
+          ### Published Container Images (\`${VERSION}\`)
+          - \`${IMAGE_BASE_LOWER}/core:${VERSION}\`
+          - \`${IMAGE_BASE_LOWER}/media:${VERSION}\`
+          - \`${IMAGE_BASE_LOWER}/health:${VERSION}\`
+          - \`${IMAGE_BASE_LOWER}/gateway:${VERSION}\`
+          - \`${IMAGE_BASE_LOWER}/hasura:${VERSION}\`
+
+          ### Verification Checksums (SHA-256)
+          \`\`\`
+          $(cat release-assets/SHA256SUMS.txt)
+          \`\`\`
+          EOF
+
+          PRERELEASE_FLAG=()
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG=(--prerelease)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "release-assets/core-openapi-${TAG}.json" \
+              "release-assets/media-linux-amd64-${TAG}" \
+              "release-assets/SHA256SUMS.txt" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              "release-assets/core-openapi-${TAG}.json" \
+              "release-assets/media-linux-amd64-${TAG}" \
+              "release-assets/SHA256SUMS.txt" \
+              --target "$GITHUB_SHA" \
+              --title "API Platform ${TAG}" \
+              --generate-notes \
+              --notes-file release-notes-footer.md \
+              "${PRERELEASE_FLAG[@]}"
+          fi
