@@ -68,10 +68,45 @@ class HealthAggregatorTests(unittest.TestCase):
 
                 with urllib.request.urlopen(f"http://127.0.0.1:{agg_port}/healthz") as resp:
                     self.assertEqual(resp.status, 200)
+
+                head_req = urllib.request.Request(f"http://127.0.0.1:{agg_port}/health", method="HEAD")
+                with urllib.request.urlopen(head_req) as resp:
+                    self.assertEqual(resp.status, 200)
+                    self.assertEqual(resp.read(), b"")
             finally:
                 agg.shutdown()
                 agg.server_close()
         finally:
+            upstream.shutdown()
+            upstream.server_close()
+
+    def test_coalesced_cache_prevents_upstream_probe_storm(self):
+        hits = {"count": 0}
+
+        class CountingHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                hits["count"] += 1
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"healthy"}')
+
+            def log_message(self, format, *args):  # noqa: A002
+                pass
+
+        upstream = HTTPServer(("127.0.0.1", 0), CountingHandler)
+        up_port = upstream.server_address[1]
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        agg = create_server("127.0.0.1", 0, {"svc": f"http://127.0.0.1:{up_port}/ok"}, cache_ttl=5.0)
+        agg_port = agg.server_address[1]
+        threading.Thread(target=agg.serve_forever, daemon=True).start()
+        try:
+            for _ in range(5):
+                with urllib.request.urlopen(f"http://127.0.0.1:{agg_port}/health") as resp:
+                    self.assertEqual(resp.status, 200)
+            self.assertEqual(hits["count"], 1)
+        finally:
+            agg.shutdown()
+            agg.server_close()
             upstream.shutdown()
             upstream.server_close()
 

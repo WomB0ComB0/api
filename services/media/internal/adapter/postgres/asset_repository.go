@@ -26,8 +26,16 @@ func NewAssetRepository(ctx context.Context, databaseURL string) (*AssetReposito
 		return nil, err
 	}
 	cfg.MaxConns = 15
-	cfg.MinConns = 1
+	cfg.MinConns = 2
 	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnLifetimeJitter = 5 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "10000"
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

@@ -1,6 +1,13 @@
+import { Logger, LogLevel } from '@resq-systems/logger';
 import pg from 'pg';
 
 const { Pool } = pg;
+
+const dbLog = Logger.getLogger('[core-db]', {
+  minLevel: LogLevel.WARN,
+  includeTimestamp: true,
+  colorize: false,
+});
 
 export interface QueryResult<T extends Record<string, unknown> = Record<string, unknown>> {
   rows: T[];
@@ -22,6 +29,16 @@ export function createDatabase(connectionString: string): Database {
     max: 20,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
+    statement_timeout: 10_000,
+    query_timeout: 12_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    maxUses: 7_500,
+  });
+
+  // Prevent unhandled pool errors from crashing the process on transient Postgres restarts
+  pool.on('error', (err) => {
+    dbLog.error('Unexpected idle PostgreSQL client error', err);
   });
 
   return {
@@ -37,13 +54,8 @@ export function createDatabase(connectionString: string): Database {
     },
 
     async healthCheck(): Promise<boolean> {
-      const client = await pool.connect();
-      try {
-        await client.query('SELECT 1');
-        return true;
-      } finally {
-        client.release();
-      }
+      await pool.query('SELECT 1');
+      return true;
     },
 
     async close(): Promise<void> {

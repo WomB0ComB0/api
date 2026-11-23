@@ -3,6 +3,18 @@
 	admin off
 }
 
+(proxy_defaults) {
+	lb_try_duration 3s
+	lb_try_interval 250ms
+	transport http {
+		dial_timeout 5s
+		response_header_timeout 30s
+		keepalive 90s
+		keepalive_idle_conns 64
+		keepalive_idle_conns_per_host 32
+	}
+}
+
 :{$PORT:8080} {
 	encode zstd gzip
 
@@ -26,28 +38,37 @@
 	handle @cdn {
 		reverse_proxy {$CDN_WORKER_UPSTREAM:https://cdn-worker.mikeodnis3242004.workers.dev} {
 			header_up Host {upstream_hostport}
+			import proxy_defaults
 		}
 	}
 
 	@health path /health
 	handle @health {
-		reverse_proxy {$HEALTH_UPSTREAM:health-aggregator.railway.internal:8000}
+		reverse_proxy {$HEALTH_UPSTREAM:health-aggregator.railway.internal:8000} {
+			import proxy_defaults
+		}
 	}
 
 	@core path /v1/core /v1/core/*
 	handle @core {
-		reverse_proxy {$CORE_UPSTREAM:core-service.railway.internal:3000}
+		reverse_proxy {$CORE_UPSTREAM:core-service.railway.internal:3000} {
+			import proxy_defaults
+		}
 	}
 
 	@media path /v1/media /v1/media/*
 	handle @media {
-		reverse_proxy {$MEDIA_UPSTREAM:media-service.railway.internal:8080}
+		reverse_proxy {$MEDIA_UPSTREAM:media-service.railway.internal:8080} {
+			import proxy_defaults
+		}
 	}
 
 	@links path /v1/links /v1/links/*
 	handle @links {
 		uri strip_prefix /v1/links
-		reverse_proxy {$HASURA_UPSTREAM:hasura.railway.internal:8080}
+		reverse_proxy {$HASURA_UPSTREAM:hasura.railway.internal:8080} {
+			import proxy_defaults
+		}
 	}
 
 	handle {

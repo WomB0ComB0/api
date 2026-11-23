@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import signal
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +20,8 @@ DEFAULT_SERVICES = (
     "media=http://media-service:8080/v1/media/health,"
     "hasura=http://hasura:8080/healthz"
 )
+
+_SHARED_POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="health-probe")
 
 
 def parse_services(raw: str | None) -> Dict[str, str]:
@@ -38,7 +42,7 @@ def parse_services(raw: str | None) -> Dict[str, str]:
     return services
 
 
-def check_service_health(name: str, url: str, timeout: float = 5.0) -> dict:
+def check_service_health(name: str, url: str, timeout: float = 3.0) -> dict:
     """Check health of a single upstream service."""
     start = time.monotonic()
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": "api-health-aggregator/1.0"})
@@ -82,8 +86,8 @@ def check_service_health(name: str, url: str, timeout: float = 5.0) -> dict:
         }
 
 
-def check_all_services(services: Dict[str, str], timeout: float = 5.0) -> tuple[int, dict]:
-    """Check all configured services concurrently and return (http_status, body)."""
+def check_all_services(services: Dict[str, str], timeout: float = 3.0) -> tuple[int, dict]:
+    """Check all configured services concurrently using the shared pool and return (http_status, body)."""
     if not services:
         return 503, {
             "status": "degraded",
@@ -91,9 +95,8 @@ def check_all_services(services: Dict[str, str], timeout: float = 5.0) -> tuple[
             "services": [],
         }
 
-    with ThreadPoolExecutor(max_workers=min(len(services), 10)) as pool:
-        futures = [pool.submit(check_service_health, name, url, timeout) for name, url in services.items()]
-        results: List[dict] = [f.result() for f in futures]
+    futures = [_SHARED_POOL.submit(check_service_health, name, url, timeout) for name, url in services.items()]
+    results: List[dict] = [f.result() for f in futures]
 
     all_healthy = all(r["status"] == "healthy" for r in results)
     status_code = 200 if all_healthy else 503
@@ -104,9 +107,39 @@ def check_all_services(services: Dict[str, str], timeout: float = 5.0) -> tuple[
     }
 
 
-def make_handler(services: Dict[str, str]):
+class _CoalescedHealthCache:
+    """Short-TTL coalescing cache to prevent thundering-herd fan-out under probe storms."""
+
+    def __init__(self, ttl_seconds: float = 2.0) -> None:
+        self._ttl = ttl_seconds
+        self._lock = threading.Lock()
+        self._expires_at = 0.0
+        self._cached: tuple[int, dict] | None = None
+
+    def get_or_refresh(self, services: Dict[str, str]) -> tuple[int, dict]:
+        now = time.monotonic()
+        with self._lock:
+            if self._cached is not None and now < self._expires_at:
+                return self._cached
+            result = check_all_services(services)
+            self._cached = result
+            self._expires_at = time.monotonic() + self._ttl
+            return result
+
+
+def make_handler(services: Dict[str, str], cache_ttl: float = 2.0):
+    cache = _CoalescedHealthCache(ttl_seconds=cache_ttl)
+
     class HealthHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._handle(head_only=True)
+
         def do_GET(self) -> None:  # noqa: N802
+            self._handle(head_only=False)
+
+        def _handle(self, head_only: bool) -> None:
             if self.path == "/healthz":
                 self._send_json(
                     200,
@@ -115,23 +148,26 @@ def make_handler(services: Dict[str, str]):
                         "service": "health-aggregator",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
+                    head_only=head_only,
                 )
                 return
 
             if self.path == "/health":
-                status_code, payload = check_all_services(services)
-                self._send_json(status_code, payload)
+                status_code, payload = cache.get_or_refresh(services)
+                self._send_json(status_code, payload, head_only=head_only)
                 return
 
-            self._send_json(404, {"error": "Not found"})
+            self._send_json(404, {"error": "Not found"}, head_only=head_only)
 
-        def _send_json(self, status: int, payload: dict) -> None:
+        def _send_json(self, status: int, payload: dict, head_only: bool = False) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            if not head_only:
+                self.wfile.write(body)
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002
             logger.info("%s - %s", self.address_string(), format % args)
@@ -141,31 +177,49 @@ def make_handler(services: Dict[str, str]):
 
 class _DualStackHTTPServer(ThreadingHTTPServer):
     address_family = socket.AF_INET6
+    allow_reuse_address = True
+    daemon_threads = True
 
     def server_bind(self) -> None:
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         super().server_bind()
 
 
-def create_server(host: str = "::", port: int = 8000, services: Dict[str, str] | None = None) -> ThreadingHTTPServer:
+class _IPv4HTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def create_server(
+    host: str = "::",
+    port: int = 8000,
+    services: Dict[str, str] | None = None,
+    cache_ttl: float | None = None,
+) -> ThreadingHTTPServer:
     resolved = services if services is not None else parse_services(os.getenv("SERVICES"))
+    ttl = cache_ttl if cache_ttl is not None else float(os.getenv("HEALTH_CACHE_TTL_SECONDS", "2.0"))
+    handler = make_handler(resolved, cache_ttl=ttl)
     if ":" in host:
-        return _DualStackHTTPServer((host, port), make_handler(resolved))
-    return ThreadingHTTPServer((host, port), make_handler(resolved))
+        return _DualStackHTTPServer((host, port), handler)
+    return _IPv4HTTPServer((host, port), handler)
 
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "::")
     services = parse_services(os.getenv("SERVICES"))
-    logger.info("Health aggregator starting on [%s]:%d with services: %s", host, port, list(services.keys()))
-    try:
-        server = create_server(host=host, port=port, services=services)
-    except OSError:
-        server = create_server(host="0.0.0.0", port=port, services=services)
+    server = create_server(host, port, services)
+
+    def _shutdown(signum, _frame):
+        logger.info("Received signal %s, shutting down health aggregator...", signum)
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    logger.info("Health aggregator listening on [%s]:%s checking %d services", host, port, len(services))
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
-        pass
     finally:
         server.server_close()
+        _SHARED_POOL.shutdown(wait=False)

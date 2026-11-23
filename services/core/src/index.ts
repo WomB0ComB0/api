@@ -40,6 +40,8 @@ const hostname = process.env.HOST || '::';
 server.listen({
   port: config.port,
   hostname,
+  idleTimeout: 30,
+  maxRequestBodySize: 1024 * 1024, // 1 MiB JSON API body cap
 });
 
 log.info('Core service (Elysia) listening', { hostname, port: config.port });
