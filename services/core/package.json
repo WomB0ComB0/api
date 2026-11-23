@@ -22,6 +22,10 @@
     "@elysiajs/opentelemetry": "^1.4.11",
     "@elysiajs/server-timing": "^1.4.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.2",
+    "@resq-systems/dsa": "^3.0.0",
+    "@resq-systems/logger": "^0.3.0",
+    "@resq-systems/types": "^0.2.0",
+    "effect": "^4.0.0",
     "elysia": "^1.4.32",
     "pg": "^8.23.1",
     "zod": "^4.6.7"

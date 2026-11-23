@@ -5,16 +5,18 @@ import { Elysia } from 'elysia';
 import { buildApp } from './app.js';
 import { loadConfig, resolveOtelTracesUrl } from './config.js';
 import { createDatabase } from './db.js';
+import { createCoreLogger } from './plugins/logger.js';
 import { ensureSchema } from './schema.js';
 
 const config = loadConfig();
+const log = createCoreLogger(config.nodeEnv === 'production');
 const db = createDatabase(config.databaseUrl);
 
 try {
   await ensureSchema(db);
-  console.log('Database schema verified/initialized');
+  log.info('Database schema verified/initialized');
 } catch (err) {
-  console.error('Failed to initialize database schema:', err);
+  log.error('Failed to initialize database schema', err);
   process.exit(1);
 }
 
@@ -40,13 +42,13 @@ server.listen({
   hostname,
 });
 
-console.log(`Core service (Elysia) listening on http://[${hostname}]:${config.port}`);
+log.info('Core service (Elysia) listening', { hostname, port: config.port });
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`Received ${signal}, flushing telemetry and shutting down core service...`);
+  log.info('Flushing telemetry and shutting down core service', { signal });
   try {
     const provider = trace.getTracerProvider() as {
       forceFlush?: () => Promise<void>;
@@ -62,7 +64,7 @@ async function shutdown(signal: string) {
     await db.close();
     process.exit(0);
   } catch (err) {
-    console.error('Error during shutdown:', err);
+    log.error('Error during shutdown', err);
     process.exit(1);
   }
 }

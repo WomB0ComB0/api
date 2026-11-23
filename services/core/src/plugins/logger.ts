@@ -1,3 +1,5 @@
+import { JsonTransport, LogLevel, Logger } from '@resq-systems/logger';
+import { isNonEmptyString } from '@resq-systems/types';
 import { Elysia } from 'elysia';
 import { randomUUID } from 'node:crypto';
 
@@ -6,17 +8,36 @@ export interface RequestLoggerOptions {
   json: boolean;
 }
 
+let jsonTransportAttached = false;
+
+export function createCoreLogger(json: boolean): Logger {
+  if (json && !jsonTransportAttached) {
+    Logger.addTransport(new JsonTransport({ name: 'core-json' }));
+    jsonTransportAttached = true;
+  }
+  return Logger.getLogger('[core-service]', {
+    minLevel: LogLevel.INFO,
+    includeTimestamp: true,
+    colorize: !json,
+  });
+}
+
 /**
- * Lightweight structured request timing & logging plugin.
+ * Structured request timing & logging plugin backed by @resq-systems/logger.
  * Propagates/generates `X-Request-ID`, extracts client IP, and logs duration per request.
  */
 export function createRequestLoggerPlugin(options: RequestLoggerOptions) {
+  const log = createCoreLogger(options.json);
+
   return new Elysia({ name: 'core.request-logger' })
     .derive({ as: 'global' }, ({ request, set }) => {
-      const requestId = request.headers.get('x-request-id') || randomUUID();
+      const incomingId = request.headers.get('x-request-id');
+      const requestId = isNonEmptyString(incomingId) ? incomingId : randomUUID();
       set.headers['x-request-id'] = requestId;
       const forwarded = request.headers.get('x-forwarded-for');
-      const clientIp = forwarded ? forwarded.split(',')[0]!.trim() : request.headers.get('x-real-ip') || 'local';
+      const clientIp = isNonEmptyString(forwarded)
+        ? forwarded.split(',')[0]!.trim()
+        : request.headers.get('x-real-ip') || 'local';
       return {
         requestId,
         clientIp,
@@ -28,25 +49,22 @@ export function createRequestLoggerPlugin(options: RequestLoggerOptions) {
 
       const durationMs = Number((performance.now() - requestStartMs).toFixed(2));
       const statusCode = typeof set.status === 'number' ? set.status : 200;
+      const meta = {
+        service: 'core',
+        request_id: requestId,
+        method: request.method,
+        path,
+        status: statusCode,
+        duration_ms: durationMs,
+        ip: clientIp,
+      };
 
-      if (options.json) {
-        console.info(
-          JSON.stringify({
-            ts: new Date().toISOString(),
-            level: statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info',
-            service: 'core',
-            request_id: requestId,
-            method: request.method,
-            path,
-            status: statusCode,
-            duration_ms: durationMs,
-            ip: clientIp,
-          })
-        );
+      if (statusCode >= 500) {
+        log.error(`${request.method} ${path} -> ${statusCode}`, undefined, meta);
+      } else if (statusCode >= 400) {
+        log.warn(`${request.method} ${path} -> ${statusCode}`, meta);
       } else {
-        console.info(
-          `[core] ${request.method} ${path} -> ${statusCode} (${durationMs}ms) ip=${clientIp} req=${requestId.slice(0, 8)}`
-        );
+        log.info(`${request.method} ${path} -> ${statusCode}`, meta);
       }
     });
 }
