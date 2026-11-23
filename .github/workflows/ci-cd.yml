@@ -270,7 +270,7 @@ jobs:
             local dir="$1" svc="$2" chg="$3"
             if [ "$chg" = "true" ] || [ "$FORCE_ALL" = "true" ]; then
               echo "Deploying $svc from $dir..."
-              railway up "$dir" --service "$svc" --path-as-root --detach
+              railway up "$dir" --service "$svc" --environment production --path-as-root --detach --yes
             fi
           }
 
