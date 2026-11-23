@@ -2,31 +2,86 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      deploy_all:
+        description: 'Force build & deploy all services'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
-  test:
-    name: Run Tests
+  changes:
+    name: Detect Changed Services
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      media: ${{ steps.filter.outputs.media }}
+      health: ${{ steps.filter.outputs.health }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      hasura: ${{ steps.filter.outputs.hasura }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            core:
+              - 'services/core/**'
+              - '.github/workflows/ci-cd.yml'
+            media:
+              - 'services/media/**'
+              - '.github/workflows/ci-cd.yml'
+            health:
+              - 'services/health/**'
+              - '.github/workflows/ci-cd.yml'
+            gateway:
+              - 'services/gateway/**'
+              - '.github/workflows/ci-cd.yml'
+            hasura:
+              - 'hasura/**'
+              - '.github/workflows/ci-cd.yml'
+            infra:
+              - 'docker-compose*.yml'
+              - 'database/**'
+              - 'traefik/**'
+              - 'otel-collector-config.yaml'
+              - '.env.example'
+              - '.github/workflows/ci-cd.yml'
+
+  test-core:
+    name: Test Core (Bun + Elysia)
+    needs: changes
+    if: always() && (needs.changes.outputs.core == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install dependencies (Core)
+      - name: Install dependencies
         working-directory: services/core
         run: bun install --frozen-lockfile
 
-      - name: Typecheck, test, and build (Core)
+      - name: Typecheck, test, compile binary & export OpenAPI
         working-directory: services/core
         run: |
           bun run typecheck
@@ -34,168 +89,235 @@ jobs:
           bun run build
           bun run export-openapi dist/openapi.json
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Upload Core OpenAPI spec
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-openapi
+          path: services/core/dist/openapi.json
+          retention-days: 14
+
+  test-media:
+    name: Test Media (Go Hexagonal)
+    needs: changes
+    if: always() && (needs.changes.outputs.media == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.26.11'
           cache-dependency-path: services/media/go.sum
 
-      - name: Vet, test, and build (Media)
+      - name: Vet, race-test (incl. Hexagonal & N+1 tests), and build
         working-directory: services/media
         run: |
           go vet ./...
-          go test -race -v ./...
-          go build ./cmd/server
+          go test -race -coverprofile=coverage.out ./...
+          go build -trimpath -ldflags="-s -w" ./cmd/server
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+  test-health:
+    name: Test Health Aggregator (Python)
+    needs: changes
+    if: always() && (needs.changes.outputs.health == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Test Health Aggregator
+      - name: Run unit tests
         working-directory: services/health
         run: python -m unittest discover -v
 
-      - name: Validate Docker Compose Config
-        run: |
-          cp .env.example .env
-          docker compose config -q
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
-
-  build-core:
-    name: Build Core Service
-    needs: test
+  validate-infra:
+    name: Validate Compose, Caddy & Hasura Config
+    needs: changes
+    if: always() && (needs.changes.outputs.infra == 'true' || needs.changes.outputs.gateway == 'true' || needs.changes.outputs.hasura == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
+      - name: Validate Docker Compose (dev + prod)
+        run: |
+          docker compose --env-file .env.example config -q
+          docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.prod.yml config -q
+
+      - name: Validate Caddyfile syntax
+        run: |
+          docker run --rm -v "${{ github.workspace }}/services/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.9-alpine caddy validate --config /etc/caddy/Caddyfile
+
+  build-images:
+    name: Build & Push (${{ matrix.service }})
+    needs: [changes, test-core, test-media, test-health, validate-infra]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: core
+            context: ./services/core
+            changed_key: core
+          - service: media
+            context: ./services/media
+            changed_key: media
+          - service: health
+            context: ./services/health
+            changed_key: health
+          - service: gateway
+            context: ./services/gateway
+            changed_key: gateway
+          - service: hasura
+            context: ./hasura
+            changed_key: hasura
+    steps:
+      - name: Check if service changed
+        id: should_build
+        run: |
+          CHANGED="${{ needs.changes.outputs[matrix.changed_key] }}"
+          FORCE="${{ inputs.deploy_all }}"
+          if [ "$CHANGED" = "true" ] || [ "$FORCE" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.should_build.outputs.run == 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.should_build.outputs.run == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.should_build.outputs.run == 'true'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract image metadata
         id: meta
+        if: steps.should_build.outputs.run == 'true'
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/core
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
             type=semver,pattern={{version}}
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      - name: Build and push image (cached)
+        if: steps.should_build.outputs.run == 'true'
+        uses: docker/build-push-action@v6
         with:
-          context: ./services/core
+          context: ${{ matrix.context }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  build-media:
-    name: Build Media Service
-    needs: test
+  deploy-railway:
+    name: Deploy Changed Services to Railway
+    needs: [changes, build-images]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://api.mikeodnis.dev
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/media
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=semver,pattern={{version}}
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./services/media
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  build-health:
-    name: Build Health Service
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/health
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./services/health
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  deploy-static:
-    name: Deploy OpenAPI Specs to R2
-    needs: [build-core, build-media, build-health]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Generate Core OpenAPI spec
-        working-directory: services/core
-        run: |
-          bun install --frozen-lockfile
-          bun run export-openapi dist/openapi.json
-
-      - name: Upload to R2 (when configured)
+      - name: Deploy changed services via Railway CLI
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          FORCE_ALL: ${{ inputs.deploy_all }}
+          CHG_CORE: ${{ needs.changes.outputs.core }}
+          CHG_MEDIA: ${{ needs.changes.outputs.media }}
+          CHG_HEALTH: ${{ needs.changes.outputs.health }}
+          CHG_GATEWAY: ${{ needs.changes.outputs.gateway }}
+          CHG_HASURA: ${{ needs.changes.outputs.hasura }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$R2_BUCKET" ]; then
-            echo "Skipping R2 OpenAPI upload (CLOUDFLARE_API_TOKEN or R2_BUCKET secret not set)"
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::notice::Skipping Railway deploy (set RAILWAY_TOKEN project token secret to enable auto-deploy)."
             exit 0
           fi
-          bunx wrangler r2 object put "${R2_BUCKET}/assets/openapi/core.json" \
-            --file=services/core/dist/openapi.json \
-            --content-type=application/json
+
+          npm install -g @railway/cli
+
+          deploy_if_needed() {
+            local dir="$1" svc="$2" chg="$3"
+            if [ "$chg" = "true" ] || [ "$FORCE_ALL" = "true" ]; then
+              echo "Deploying $svc from $dir..."
+              railway up "$dir" --service "$svc" --path-as-root --detach
+            fi
+          }
+
+          deploy_if_needed "services/core" "core-service" "$CHG_CORE"
+          deploy_if_needed "services/media" "media-service" "$CHG_MEDIA"
+          deploy_if_needed "services/health" "health-aggregator" "$CHG_HEALTH"
+          deploy_if_needed "services/gateway" "gateway" "$CHG_GATEWAY"
+          deploy_if_needed "hasura" "hasura" "$CHG_HASURA"
+
+  live-smoke-test:
+    name: Post-Deploy Live Verification
+    needs: [deploy-railway]
+    if: |
+      success() &&
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify live endpoints & security headers
+        run: |
+          set -euo pipefail
+          check_url() {
+            local url="$1"
+            for attempt in 1 2 3 4 5; do
+              if curl -fsS --max-time 10 "$url" >/dev/null; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Failed health check: $url"
+            return 1
+          }
+
+          check_url "https://api.mikeodnis.dev/health"
+          check_url "https://api.mikeodnis.dev/v1/core/health"
+          check_url "https://api.mikeodnis.dev/v1/core/openapi.json"
+          check_url "https://api.mikeodnis.dev/v1/media/health/ready"
+
+          HEADERS=$(curl -sS -D - -o /dev/null https://api.mikeodnis.dev/health)
+          echo "$HEADERS" | grep -qi "strict-transport-security:"
+          echo "$HEADERS" | grep -qi "x-content-type-options: nosniff"
+          echo "$HEADERS" | grep -qi "x-frame-options: DENY"
+
+          {
+            echo "### Production Live Verification (\`api.mikeodnis.dev\`)"
+            echo "- \`/health\`: 200 OK"
+            echo "- \`/v1/core/health\` & \`/v1/core/openapi.json\`: 200 OK"
+            echo "- \`/v1/media/health/ready\`: 200 OK (Postgres + R2)"
+            echo "- Security headers verified: \`HSTS\`, \`X-Content-Type-Options: nosniff\`, \`X-Frame-Options: DENY\`"
+          } >> "$GITHUB_STEP_SUMMARY"

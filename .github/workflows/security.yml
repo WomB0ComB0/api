@@ -2,28 +2,38 @@ name: Security Scan
 
 on:
   schedule:
-    - cron: '0 0 * * 0' # Weekly
+    - cron: '0 6 * * 1' # Weekly Monday 06:00 UTC
   push:
-    branches: [master, main, develop]
+    branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit-core:
-    name: Bun Dependency Audit (core-service)
+    name: Bun Audit (core-service)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - name: Install & audit dependencies
         working-directory: ./services/core
         run: |
-          bun install --frozen-lockfile || bun install
+          bun install --frozen-lockfile
           bun audit --audit-level=high
 
   audit-media:
     name: Go Vulnerability Check (media-service)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -33,3 +43,19 @@ jobs:
       - name: Run govulncheck
         working-directory: ./services/media
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  secret-scan:
+    name: Secret Leak Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure no .env or private key files are committed
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$|\.pem$|\.key$'; then
+            echo "::error::Sensitive file committed to git!"
+            exit 1
+          fi
+          echo "No committed .env or key files found."
