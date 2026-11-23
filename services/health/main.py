@@ -11,33 +11,53 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, List
+from types import FrameType
+from typing import ClassVar, Final, Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logger: Final[logging.Logger] = logging.getLogger(__name__)
 
-DEFAULT_SERVICES = (
+DEFAULT_SERVICES: Final[str] = (
     "core=http://core-service:3000/v1/core/health,"
     "media=http://media-service:8080/v1/media/health,"
     "hasura=http://hasura:8080/healthz"
 )
 
-_PROBE_HEADERS = {"User-Agent": "api-health-aggregator/2.0", "Connection": "keep-alive"}
-_SSL_CONTEXT = ssl.create_default_context()
-_JSON_SEPARATORS = (",", ":")
-_SHARED_POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="health-probe")
+_PROBE_HEADERS: Final[dict[str, str]] = {
+    "User-Agent": "api-health-aggregator/2.0",
+    "Connection": "keep-alive",
+}
+_SSL_CONTEXT: Final[ssl.SSLContext] = ssl.create_default_context()
+_JSON_SEPARATORS: Final[tuple[str, str]] = (",", ":")
+_SHARED_POOL: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
+    max_workers=10, thread_name_prefix="health-probe"
+)
 
 # Pre-encoded static wire frames for zero-allocation error / HEAD responses
-_NOT_FOUND_BODY = b'{"error":"Not found"}'
-_NOT_FOUND_HEAD = (
+_NOT_FOUND_BODY: Final[bytes] = b'{"error":"Not found"}'
+_NOT_FOUND_HEAD: Final[bytes] = (
     b"HTTP/1.1 404 Not Found\r\n"
     b"Content-Type: application/json\r\n"
     b"Content-Length: 21\r\n"
     b"Cache-Control: no-store\r\n"
     b"Connection: keep-alive\r\n\r\n"
 )
-_NOT_FOUND_GET = _NOT_FOUND_HEAD + _NOT_FOUND_BODY
+_NOT_FOUND_GET: Final[bytes] = _NOT_FOUND_HEAD + _NOT_FOUND_BODY
+
+
+class ServiceHealthResult(TypedDict):
+    service: str
+    status: Literal["healthy", "unhealthy"]
+    url: str
+    latency_ms: float
+    error: NotRequired[str]
+
+
+class AggregatedHealthPayload(TypedDict):
+    status: Literal["healthy", "degraded"]
+    timestamp: str
+    services: list[ServiceHealthResult]
 
 
 def _build_wire_frames(status: int, body: bytes) -> tuple[bytes, bytes]:
@@ -58,6 +78,15 @@ class _UpstreamTarget:
 
     __slots__ = ("name", "url", "scheme", "host", "port", "path", "_lock", "_conn")
 
+    name: str
+    url: str
+    scheme: str
+    host: str
+    port: int
+    path: str
+    _lock: threading.Lock
+    _conn: http.client.HTTPConnection | None
+
     def __init__(self, name: str, url: str) -> None:
         parsed = urlsplit(url)
         self.name = name
@@ -69,11 +98,12 @@ class _UpstreamTarget:
         if parsed.query:
             self.path = f"{self.path}?{parsed.query}"
         self._lock = threading.Lock()
-        self._conn: http.client.HTTPConnection | None = None
+        self._conn = None
 
     def _connect(self, timeout: float) -> http.client.HTTPConnection:
+        conn: http.client.HTTPConnection
         if self.scheme == "https":
-            conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+            conn = http.client.HTTPSConnection(
                 self.host, self.port, timeout=timeout, context=_SSL_CONTEXT
             )
         else:
@@ -92,7 +122,7 @@ class _UpstreamTarget:
                 pass
             self._conn = None
 
-    def probe(self, timeout: float = 3.0) -> dict:
+    def probe(self, timeout: float = 3.0) -> ServiceHealthResult:
         start = time.monotonic()
         with self._lock:
             for attempt in range(2):
@@ -155,7 +185,15 @@ class _CachedSnapshot:
 
     __slots__ = ("status", "payload", "head_frame", "get_frame", "expires_at")
 
-    def __init__(self, status: int, payload: dict, expires_at: float) -> None:
+    status: int
+    payload: AggregatedHealthPayload
+    head_frame: bytes
+    get_frame: bytes
+    expires_at: float
+
+    def __init__(
+        self, status: int, payload: AggregatedHealthPayload, expires_at: float
+    ) -> None:
         body = json.dumps(payload, separators=_JSON_SEPARATORS).encode("utf-8")
         head_frame, get_frame = _build_wire_frames(status, body)
         self.status = status
@@ -165,9 +203,9 @@ class _CachedSnapshot:
         self.expires_at = expires_at
 
 
-def parse_services(raw: str | None) -> Dict[str, str]:
+def parse_services(raw: str | None) -> dict[str, str]:
     """Parse SERVICES env var supporting 'name=http://host:port/path' or legacy 'host:port'."""
-    services: Dict[str, str] = {}
+    services: dict[str, str] = {}
     value = (raw or "").strip() or DEFAULT_SERVICES
 
     for entry in value.split(","):
@@ -183,7 +221,7 @@ def parse_services(raw: str | None) -> Dict[str, str]:
     return services
 
 
-def check_service_health(name: str, url: str, timeout: float = 3.0) -> dict:
+def check_service_health(name: str, url: str, timeout: float = 3.0) -> ServiceHealthResult:
     """Check health of a single upstream service."""
     target = _UpstreamTarget(name, url)
     try:
@@ -192,7 +230,9 @@ def check_service_health(name: str, url: str, timeout: float = 3.0) -> dict:
         target.close()
 
 
-def _probe_targets(targets: tuple[_UpstreamTarget, ...], timeout: float = 3.0) -> tuple[int, dict]:
+def _probe_targets(
+    targets: tuple[_UpstreamTarget, ...], timeout: float = 3.0
+) -> tuple[int, AggregatedHealthPayload]:
     if not targets:
         return 503, {
             "status": "degraded",
@@ -201,7 +241,7 @@ def _probe_targets(targets: tuple[_UpstreamTarget, ...], timeout: float = 3.0) -
         }
 
     if len(targets) == 1:
-        results: List[dict] = [targets[0].probe(timeout)]
+        results: list[ServiceHealthResult] = [targets[0].probe(timeout)]
     else:
         futures = [_SHARED_POOL.submit(t.probe, timeout) for t in targets]
         results = [f.result() for f in futures]
@@ -215,7 +255,9 @@ def _probe_targets(targets: tuple[_UpstreamTarget, ...], timeout: float = 3.0) -
     }
 
 
-def check_all_services(services: Dict[str, str], timeout: float = 3.0) -> tuple[int, dict]:
+def check_all_services(
+    services: dict[str, str], timeout: float = 3.0
+) -> tuple[int, AggregatedHealthPayload]:
     """Check all configured services concurrently and return (http_status, body)."""
     targets = tuple(_UpstreamTarget(name, url) for name, url in services.items())
     try:
@@ -230,11 +272,16 @@ class _CoalescedHealthCache:
 
     __slots__ = ("_targets", "_ttl", "_lock", "_snapshot")
 
+    _targets: tuple[_UpstreamTarget, ...]
+    _ttl: float
+    _lock: threading.Lock
+    _snapshot: _CachedSnapshot | None
+
     def __init__(self, targets: tuple[_UpstreamTarget, ...], ttl_seconds: float = 2.0) -> None:
         self._targets = targets
         self._ttl = ttl_seconds
         self._lock = threading.Lock()
-        self._snapshot: _CachedSnapshot | None = None
+        self._snapshot = None
 
     def get_snapshot(self) -> _CachedSnapshot:
         # Lock-free fast path: reading a reference is atomic in CPython
@@ -257,13 +304,20 @@ class _CoalescedHealthCache:
             t.close()
 
 
-def make_handler(services: Dict[str, str], cache_ttl: float = 2.0, access_log: bool = True):
-    targets = tuple(_UpstreamTarget(name, url) for name, url in services.items())
-    cache = _CoalescedHealthCache(targets, ttl_seconds=cache_ttl)
+class _HealthHandlerBase(BaseHTTPRequestHandler):
+    cache: ClassVar[_CoalescedHealthCache]
 
-    class HealthHandler(BaseHTTPRequestHandler):
+
+def make_handler(
+    services: dict[str, str], cache_ttl: float = 2.0, access_log: bool = True
+) -> type[_HealthHandlerBase]:
+    targets = tuple(_UpstreamTarget(name, url) for name, url in services.items())
+    health_cache = _CoalescedHealthCache(targets, ttl_seconds=cache_ttl)
+
+    class HealthHandler(_HealthHandlerBase):
         protocol_version = "HTTP/1.1"
         disable_nagle_algorithm = True  # Sets TCP_NODELAY on every accepted client socket
+        cache: ClassVar[_CoalescedHealthCache] = health_cache
 
         def do_HEAD(self) -> None:  # noqa: N802
             self._handle(head_only=True)
@@ -274,7 +328,7 @@ def make_handler(services: Dict[str, str], cache_ttl: float = 2.0, access_log: b
         def _handle(self, head_only: bool) -> None:
             path = self.path
             if path == "/health":
-                snap = cache.get_snapshot()
+                snap = self.cache.get_snapshot()
                 self.wfile.write(snap.head_frame if head_only else snap.get_frame)
                 if access_log:
                     self.log_request(snap.status)
@@ -299,11 +353,10 @@ def make_handler(services: Dict[str, str], cache_ttl: float = 2.0, access_log: b
             if access_log:
                 self.log_request(404)
 
-        def log_message(self, format: str, *args) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             if access_log:
                 logger.info("%s - %s", self.address_string(), format % args)
 
-    HealthHandler._cache = cache  # type: ignore[attr-defined]
     return HealthHandler
 
 
@@ -327,7 +380,7 @@ class _IPv4HTTPServer(ThreadingHTTPServer):
 def create_server(
     host: str = "::",
     port: int = 8000,
-    services: Dict[str, str] | None = None,
+    services: dict[str, str] | None = None,
     cache_ttl: float | None = None,
 ) -> ThreadingHTTPServer:
     resolved = services if services is not None else parse_services(os.getenv("SERVICES"))
@@ -342,8 +395,7 @@ def create_server(
 def _tune_runtime_allocator_and_gc() -> None:
     """Freeze long-lived stdlib/module objects out of cyclic GC and raise gen-0 threshold."""
     gc.collect()
-    if hasattr(gc, "freeze"):
-        gc.freeze()
+    gc.freeze()
     gc.set_threshold(50_000, 10, 10)
 
 
@@ -354,7 +406,7 @@ if __name__ == "__main__":
     server = create_server(host, port, services)
     _tune_runtime_allocator_and_gc()
 
-    def _shutdown(signum, _frame):
+    def _shutdown(signum: int, _frame: FrameType | None) -> None:
         logger.info("Received signal %s, shutting down health aggregator...", signum)
         threading.Thread(target=server.shutdown, daemon=True).start()
 
@@ -365,8 +417,8 @@ if __name__ == "__main__":
     try:
         server.serve_forever()
     finally:
-        cache = getattr(server.RequestHandlerClass, "_cache", None)
-        if cache is not None:
-            cache.close()
+        handler_cls = server.RequestHandlerClass
+        if isinstance(handler_cls, type) and issubclass(handler_cls, _HealthHandlerBase):
+            handler_cls.cache.close()
         server.server_close()
         _SHARED_POOL.shutdown(wait=False)

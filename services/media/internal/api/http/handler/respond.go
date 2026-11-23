@@ -10,7 +10,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
+type errorResponse struct {
+	Error   string           `json:"error"`
+	Code    apperr.ErrorType `json:"code"`
+	Details map[string]any   `json:"details,omitempty"`
+}
+
+func writeJSON[T any](w http.ResponseWriter, status int, payload T) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
 		http.Error(w, `{"error":"encoding error"}`, http.StatusInternalServerError)
@@ -27,20 +33,17 @@ func writeAppError(w http.ResponseWriter, err error) {
 		if status >= 500 {
 			log.Error().Err(appErr.Cause).Str("type", string(appErr.Type)).Msg(appErr.Message)
 		}
-		payload := map[string]any{
-			"error": appErr.Message,
-			"code":  appErr.Type,
-		}
-		if len(appErr.Details) > 0 {
-			payload["details"] = appErr.Details
-		}
-		writeJSON(w, status, payload)
+		writeJSON(w, status, errorResponse{
+			Error:   appErr.Message,
+			Code:    appErr.Type,
+			Details: appErr.Details,
+		})
 		return
 	}
 
 	log.Error().Err(err).Msg("Unhandled internal error")
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"error": "Internal server error",
-		"code":  apperr.TypeSystem,
+	writeJSON(w, http.StatusInternalServerError, errorResponse{
+		Error: "Internal server error",
+		Code:  apperr.TypeSystem,
 	})
 }

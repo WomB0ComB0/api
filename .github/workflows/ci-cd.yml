@@ -110,10 +110,11 @@ jobs:
           go-version: '1.26.11'
           cache-dependency-path: services/media/go.sum
 
-      - name: Vet, race-test (incl. Hexagonal & N+1 tests), and build
+      - name: Vet, staticcheck, race-test (incl. Hexagonal & N+1 tests), and build
         working-directory: services/media
         run: |
           go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@latest ./...
           go test -race -coverprofile=coverage.out ./...
           go build -trimpath -ldflags="-s -w" ./cmd/server
 
@@ -130,9 +131,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run unit tests
+      - name: Strict static typecheck (mypy --strict) & unit tests
         working-directory: services/health
-        run: python -m unittest discover -v
+        run: |
+          python -m pip install --quiet mypy
+          mypy --config-file pyproject.toml main.py test_main.py
+          python -m unittest discover -v
 
   validate-infra:
     name: Validate Compose, Caddy & Hasura Config

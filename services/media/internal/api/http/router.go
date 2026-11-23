@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net"
 	"net/http"
 	"time"
 
@@ -22,11 +23,28 @@ func NewRouter(factory *application.Factory, cfg *config.Config) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
+	// Fail-closed XFF walk trusting only private mesh & loopback reverse proxies (Railway, Docker, localhost)
+	r.Use(chimiddleware.ClientIPFromXFF(
+		"127.0.0.1/32",
+		"10.0.0.0/8",
+		"100.64.0.0/10",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"::1/128",
+		"fc00::/7",
+	))
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(60 * time.Second))
-	r.Use(httprate.LimitByIP(100, 1*time.Minute))
+	r.Use(httprate.LimitBy(100, 1*time.Minute, func(r *http.Request) (string, error) {
+		if ip := chimiddleware.GetClientIP(r.Context()); ip != "" {
+			return httprate.CanonicalizeIP(ip), nil
+		}
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			return httprate.CanonicalizeIP(host), nil
+		}
+		return httprate.CanonicalizeIP(r.RemoteAddr), nil
+	}))
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,

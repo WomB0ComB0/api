@@ -1,7 +1,6 @@
 import json
 import threading
 import unittest
-import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -9,7 +8,7 @@ from main import check_all_services, create_server, parse_services
 
 
 class _StubHandler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
+    def do_GET(self) -> None:  # noqa: N802
         if self.path == "/ok":
             self.send_response(200)
             self.end_headers()
@@ -18,12 +17,12 @@ class _StubHandler(BaseHTTPRequestHandler):
         self.send_response(503)
         self.end_headers()
 
-    def log_message(self, format, *args):  # noqa: A002
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass
 
 
 class HealthAggregatorTests(unittest.TestCase):
-    def test_parse_services_formats(self):
+    def test_parse_services_formats(self) -> None:
         defaults = parse_services(None)
         self.assertEqual(defaults["core"], "http://core-service:3000/v1/core/health")
         self.assertEqual(defaults["media"], "http://media-service:8080/v1/media/health")
@@ -35,7 +34,7 @@ class HealthAggregatorTests(unittest.TestCase):
         legacy = parse_services("svc:9000")
         self.assertEqual(legacy, {"svc": "http://svc:9000/health"})
 
-    def test_live_aggregation_healthy_and_degraded(self):
+    def test_live_aggregation_healthy_and_degraded(self) -> None:
         upstream = HTTPServer(("127.0.0.1", 0), _StubHandler)
         up_port = upstream.server_address[1]
         up_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
@@ -80,17 +79,17 @@ class HealthAggregatorTests(unittest.TestCase):
             upstream.shutdown()
             upstream.server_close()
 
-    def test_coalesced_cache_prevents_upstream_probe_storm(self):
-        hits = {"count": 0}
+    def test_coalesced_cache_prevents_upstream_probe_storm(self) -> None:
+        hits: dict[str, int] = {"count": 0}
 
         class CountingHandler(BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802
+            def do_GET(self) -> None:  # noqa: N802
                 hits["count"] += 1
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'{"status":"healthy"}')
 
-            def log_message(self, format, *args):  # noqa: A002
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
                 pass
 
         upstream = HTTPServer(("127.0.0.1", 0), CountingHandler)

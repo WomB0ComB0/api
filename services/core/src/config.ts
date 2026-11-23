@@ -35,8 +35,8 @@ export interface AppConfig {
   jwtAccessTtl: string;
   jwtRefreshTtlDays: number;
   corsOrigins: (string | RegExp)[];
-  otelEndpoint?: string;
-  otelHeaders?: Record<string, string>;
+  otelEndpoint?: string | undefined;
+  otelHeaders?: Record<string, string> | undefined;
   otelServiceName: string;
   rateLimitMax: number;
   rateLimitWindowMs: number;
