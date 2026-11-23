@@ -37,7 +37,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.11'
           cache-dependency-path: services/media/go.sum
 
       - name: Vet, test, and build (Media)

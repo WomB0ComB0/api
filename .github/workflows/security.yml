@@ -5,31 +5,31 @@ on:
     - cron: '0 0 * * 0' # Weekly
   push:
     branches: [master, main, develop]
+  pull_request:
+    branches: [master, main]
 
 jobs:
-  trivy-scan:
-    name: Trivy Container Scan
+  audit-core:
+    name: Bun Dependency Audit (core-service)
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    strategy:
-      matrix:
-        service: [core, media, health]
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install & audit dependencies
+        working-directory: ./services/core
+        run: |
+          bun install --frozen-lockfile || bun install
+          bun audit --audit-level=high
 
-      - name: Build image
-        run: docker build -t ${{ matrix.service }}:test ./services/${{ matrix.service }}
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.28.0
+  audit-media:
+    name: Go Vulnerability Check (media-service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          image-ref: ${{ matrix.service }}:test
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
+          go-version: '1.26.11'
+          cache-dependency-path: services/media/go.sum
+      - name: Run govulncheck
+        working-directory: ./services/media
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

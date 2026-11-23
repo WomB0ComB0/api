@@ -21,15 +21,20 @@
     "@elysiajs/openapi": "^1.4.17",
     "@elysiajs/opentelemetry": "^1.4.11",
     "@elysiajs/server-timing": "^1.4.1",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.301.2",
     "elysia": "^1.4.32",
-    "pg": "^8.13.1",
-    "zod": "^3.24.1"
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@elysiajs/eden": "^1.4.9",
     "@types/bun": "^1.4.5",
-    "@types/pg": "^8.11.10",
-    "typescript": "^5.7.2"
+    "@types/pg": "^8.23.1",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "@opentelemetry/sdk-node": ">=0.217.0",
+    "@opentelemetry/exporter-prometheus": ">=0.217.0",
+    "@opentelemetry/propagator-jaeger": ">=2.9.0"
   }
 }

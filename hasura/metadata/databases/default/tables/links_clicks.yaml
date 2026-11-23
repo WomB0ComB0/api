@@ -20,3 +20,4 @@ select_permissions:
         link:
           user_id:
             _eq: X-Hasura-User-Id
+      limit: 100

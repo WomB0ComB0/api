@@ -38,9 +38,14 @@ func (uc *PresignUploadUseCase) Execute(ctx context.Context, in PresignInput) (*
 	if err != nil {
 		return nil, err
 	}
+	contentType := strings.TrimSpace(in.ContentType)
+	lowerCT := strings.ToLower(contentType)
+	if strings.Contains(lowerCT, "text/html") || strings.Contains(lowerCT, "javascript") || strings.Contains(lowerCT, "ecmascript") {
+		return nil, apperr.Validation("content_type is not allowed")
+	}
 
 	key := model.BuildObjectKey(visibility, in.Actor.UserID, uuid.NewString()+filename.Ext)
-	uploadURL, err := uc.store.PresignPutObject(ctx, key, in.ContentType, DefaultPresignTTL)
+	uploadURL, err := uc.store.PresignPutObject(ctx, key, contentType, DefaultPresignTTL)
 	if err != nil {
 		return nil, apperr.External("failed to generate presigned upload URL", err)
 	}

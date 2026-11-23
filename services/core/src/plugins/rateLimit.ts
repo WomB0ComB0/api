@@ -19,7 +19,8 @@ export function createRateLimitPlugin(options: RateLimitOptions) {
 
     const now = Date.now();
     const forwarded = request.headers.get('x-forwarded-for');
-    const ip = forwarded ? forwarded.split(',')[0]!.trim() : request.headers.get('x-real-ip') || 'local';
+    const rawIp = forwarded ? forwarded.split(',')[0]!.trim() : request.headers.get('x-real-ip') || 'local';
+    const ip = rawIp.slice(0, 64) || 'local';
 
     let bucket = buckets.get(ip);
     if (!bucket || now >= bucket.resetAt) {
@@ -29,10 +30,16 @@ export function createRateLimitPlugin(options: RateLimitOptions) {
 
     bucket.count += 1;
 
-    // Periodic cleanup to prevent unbounded growth
+    // Hard-cap map size to prevent OOM under spoofed-IP flooding
     if (buckets.size > 10_000) {
       for (const [k, v] of buckets) {
         if (now >= v.resetAt) buckets.delete(k);
+      }
+      if (buckets.size > 10_000) {
+        for (const k of buckets.keys()) {
+          buckets.delete(k);
+          if (buckets.size <= 8_000) break;
+        }
       }
     }
 

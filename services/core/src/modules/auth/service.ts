@@ -47,6 +47,15 @@ interface ApiKeyRecord extends Record<string, unknown> {
 
 export type SignJwtFn = (payload: Record<string, unknown>) => Promise<string>;
 
+// Pre-computed dummy Argon2id hash used to equalize login timing when a user does not exist.
+let dummyHashPromise: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  if (!dummyHashPromise) {
+    dummyHashPromise = hashPassword('dummy-constant-time-login-padding-secret');
+  }
+  return dummyHashPromise;
+}
+
 function toIso(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
 }
@@ -155,6 +164,8 @@ export class AuthService {
 
     const user = result.rows[0];
     if (!user || !user.is_active) {
+      // Equalize Argon2id work factor to prevent email enumeration via response timing
+      await verifyPassword(body.password, await getDummyPasswordHash());
       return { ok: false, code: 401, error: 'Invalid credentials' };
     }
 
@@ -293,7 +304,8 @@ export class AuthService {
       `SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at
        FROM core.api_keys
        WHERE user_id = $1 AND revoked_at IS NULL
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT 100`,
       [userId]
     );
 

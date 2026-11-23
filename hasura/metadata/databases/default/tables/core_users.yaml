@@ -11,3 +11,4 @@ select_permissions:
       filter:
         id:
           _eq: X-Hasura-User-Id
+      limit: 100
