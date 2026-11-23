@@ -106,10 +106,10 @@ CLOUDFLARE_R2_BUCKET=xxx
 CLOUDFLARE_R2_PUBLIC_URL=https://cdn.mikeodnis.dev
 ```
 
-### Monitoring (Optional)
+### Monitoring (Optional — Axiom / OTLP)
 ```bash
-BETTERSTACK_SOURCE_TOKEN=xxx
-OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=https://us-east-1.aws.edge.axiom.co
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xaat-...,X-Axiom-Dataset=api-mikeodnis-dev-traces"
 ```
 
 ## Troubleshooting
