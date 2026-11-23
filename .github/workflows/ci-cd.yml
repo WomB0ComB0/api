@@ -36,8 +36,11 @@ jobs:
       hasura: ${{ steps.filter.outputs.hasura }}
       infra: ${{ steps.filter.outputs.infra }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -71,9 +74,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
 
@@ -90,7 +95,7 @@ jobs:
           bun run export-openapi dist/openapi.json
 
       - name: Upload Core OpenAPI spec
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: core-openapi
           path: services/core/dist/openapi.json
@@ -103,9 +108,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.11'
           cache-dependency-path: services/media/go.sum
@@ -125,9 +132,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -146,7 +155,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Validate Docker Compose (dev + prod)
         run: |
@@ -193,22 +204,25 @@ jobs:
     steps:
       - name: Check if service changed
         id: should_build
+        env:
+          CHANGED: ${{ needs.changes.outputs[matrix.changed_key] }}
+          FORCE: ${{ inputs.deploy_all }}
         run: |
-          CHANGED="${{ needs.changes.outputs[matrix.changed_key] }}"
-          FORCE="${{ inputs.deploy_all }}"
           if [ "$CHANGED" = "true" ] || [ "$FORCE" = "true" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.should_build.outputs.run == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: steps.should_build.outputs.run == 'true'
 
-      - uses: docker/setup-buildx-action@v4
-        if: steps.should_build.outputs.run == 'true'
-
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         if: steps.should_build.outputs.run == 'true'
         with:
           registry: ${{ env.REGISTRY }}
@@ -218,7 +232,7 @@ jobs:
       - name: Extract image metadata
         id: meta
         if: steps.should_build.outputs.run == 'true'
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
           tags: |
@@ -228,7 +242,7 @@ jobs:
 
       - name: Build and push image (cached)
         if: steps.should_build.outputs.run == 'true'
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           push: true
@@ -252,7 +266,13 @@ jobs:
       name: production
       url: https://api.mikeodnis.dev
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
 
       - name: Deploy changed services via Railway CLI
         env:
@@ -269,13 +289,11 @@ jobs:
             exit 0
           fi
 
-          npm install -g @railway/cli
-
           deploy_if_needed() {
             local dir="$1" svc="$2" chg="$3"
             if [ "$chg" = "true" ] || [ "$FORCE_ALL" = "true" ]; then
               echo "Deploying $svc from $dir..."
-              railway up "$dir" --service "$svc" --environment production --path-as-root --detach --yes
+              bunx @railway/cli@5.75.0 up "$dir" --service "$svc" --environment production --path-as-root --detach --yes
             fi
           }
 
