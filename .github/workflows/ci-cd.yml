@@ -223,7 +223,7 @@ jobs:
 
       - name: Build and push image (cached)
         if: steps.should_build.outputs.run == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           push: true
