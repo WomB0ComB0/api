@@ -6,6 +6,7 @@ import {
   generateApiKey,
   generateRefreshToken,
   sha256Hex,
+  type AccessTokenPayload,
   type UserRole,
 } from '../../auth/tokens.js';
 import type { AuthModel } from './model.js';
@@ -45,7 +46,7 @@ interface ApiKeyRecord extends Record<string, unknown> {
   created_at: string | Date;
 }
 
-export type SignJwtFn = (payload: Record<string, unknown>) => Promise<string>;
+export type SignJwtFn = (payload: AccessTokenPayload) => Promise<string>;
 
 // Pre-computed dummy Argon2id hash used to equalize login timing when a user does not exist.
 let dummyHashPromise: Promise<string> | null = null;
@@ -79,7 +80,7 @@ export class AuthService {
     user: { id: string; email: string; role: UserRole }
   ): Promise<AuthModel['refreshResponse']> {
     const payload = buildAccessTokenPayload(user);
-    const accessToken = await signJwt(payload as unknown as Record<string, unknown>);
+    const accessToken = await signJwt(payload);
     const refresh = generateRefreshToken();
     const refreshExpiresAt = new Date(Date.now() + this.config.jwtRefreshTtlDays * 24 * 60 * 60 * 1000);
 
@@ -125,7 +126,7 @@ export class AuthService {
 
       const user = result.rows[0]!;
       const payload = buildAccessTokenPayload({ id: user.id, email: user.email, role: user.role });
-      const accessToken = await signJwt(payload as unknown as Record<string, unknown>);
+      const accessToken = await signJwt(payload);
 
       return {
         ok: true,
@@ -230,7 +231,7 @@ export class AuthService {
     }
 
     const payload = buildAccessTokenPayload({ id: row.user_id, email: row.email, role: row.role });
-    const accessToken = await signJwt(payload as unknown as Record<string, unknown>);
+    const accessToken = await signJwt(payload);
 
     return {
       ok: true,

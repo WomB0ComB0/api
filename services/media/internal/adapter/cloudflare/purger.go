@@ -41,6 +41,10 @@ func (p *CachePurger) Configured() bool {
 	return p.zoneID != "" && p.apiToken != ""
 }
 
+type purgeCacheRequest struct {
+	Files []string `json:"files"`
+}
+
 func (p *CachePurger) PurgeURLs(ctx context.Context, urls []string) error {
 	if !p.Configured() {
 		return fmt.Errorf("cloudflare cache purge credentials not configured")
@@ -49,7 +53,7 @@ func (p *CachePurger) PurgeURLs(ctx context.Context, urls []string) error {
 		return nil
 	}
 
-	payload, err := json.Marshal(map[string]any{"files": urls})
+	payload, err := json.Marshal(purgeCacheRequest{Files: urls})
 	if err != nil {
 		return fmt.Errorf("failed to marshal purge payload: %w", err)
 	}

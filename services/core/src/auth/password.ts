@@ -3,20 +3,9 @@ import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCb);
 
-interface BunPasswordAPI {
-  hash(password: string, options?: { algorithm: 'argon2id'; memoryCost?: number; timeCost?: number }): Promise<string>;
-  verify(password: string, hash: string): Promise<boolean>;
-}
-
-function getBunPassword(): BunPasswordAPI | undefined {
-  const g = globalThis as unknown as { Bun?: { password?: BunPasswordAPI } };
-  return g.Bun?.password;
-}
-
 export async function hashPassword(password: string): Promise<string> {
-  const bunPassword = getBunPassword();
-  if (bunPassword) {
-    return bunPassword.hash(password, {
+  if (typeof Bun !== 'undefined') {
+    return Bun.password.hash(password, {
       algorithm: 'argon2id',
       memoryCost: 65536,
       timeCost: 2,
@@ -42,9 +31,8 @@ export async function verifyPassword(password: string, storedHash: string): Prom
     return timingSafeEqual(derived, expected);
   }
 
-  const bunPassword = getBunPassword();
-  if (bunPassword) {
-    return bunPassword.verify(password, storedHash);
+  if (typeof Bun !== 'undefined') {
+    return Bun.password.verify(password, storedHash);
   }
 
   return false;

@@ -377,7 +377,7 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(regData.user.email).toBe('mike@example.com');
 
     const decoded = decodeJwtPayload(regData.access_token);
-    expect(decoded.sub).toBe(regData.user.id);
+    expect(decoded['sub']).toBe(regData.user.id);
     expect(decoded['https://hasura.io/jwt/claims']).toEqual({
       'x-hasura-default-role': 'user',
       'x-hasura-allowed-roles': ['user'],

@@ -3,7 +3,7 @@ import { toPositiveInt } from '@resq-systems/types';
 
 export type UserRole = 'user' | 'admin';
 
-export interface AccessTokenPayload {
+export type AccessTokenPayload = {
   sub: string;
   email: string;
   role: UserRole;
@@ -12,7 +12,7 @@ export interface AccessTokenPayload {
     'x-hasura-allowed-roles': UserRole[];
     'x-hasura-user-id': string;
   };
-}
+};
 
 export function buildAccessTokenPayload(user: {
   id: string;

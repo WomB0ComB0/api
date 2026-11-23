@@ -36,7 +36,7 @@ const server = config.otelEndpoint
       .use(coreApp)
   : coreApp;
 
-const hostname = process.env.HOST || '::';
+const hostname = process.env['HOST'] || '::';
 server.listen({
   port: config.port,
   hostname,
