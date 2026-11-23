@@ -19,6 +19,14 @@
 		respond `{"status":"healthy","service":"gateway"}` 200
 	}
 
+	# Route cdn.mikeodnis.dev traffic transparently to the Cloudflare Edge Worker + R2
+	@cdn host cdn.mikeodnis.dev
+	handle @cdn {
+		reverse_proxy {$CDN_WORKER_UPSTREAM:https://cdn-worker.mikeodnis3242004.workers.dev} {
+			header_up Host {upstream_hostport}
+		}
+	}
+
 	@health path /health
 	handle @health {
 		reverse_proxy {$HEALTH_UPSTREAM:health-aggregator.railway.internal:8000}
