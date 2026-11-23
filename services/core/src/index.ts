@@ -3,7 +3,7 @@ import { trace } from '@opentelemetry/api';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { Elysia } from 'elysia';
 import { buildApp } from './app.js';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveOtelTracesUrl } from './config.js';
 import { createDatabase } from './db.js';
 import { ensureSchema } from './schema.js';
 
@@ -26,7 +26,8 @@ const server = config.otelEndpoint
         opentelemetry({
           serviceName: config.otelServiceName,
           traceExporter: new OTLPTraceExporter({
-            url: `${config.otelEndpoint}/v1/traces`,
+            url: resolveOtelTracesUrl(config.otelEndpoint),
+            ...(config.otelHeaders ? { headers: config.otelHeaders } : {}),
           }),
         })
       )

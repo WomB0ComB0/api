@@ -20,6 +20,7 @@ const envSchema = z.object({
   JWT_REFRESH_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   CORS_ORIGINS: z.string().optional(),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
+  OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
   OTEL_SERVICE_NAME: z.string().default('core-service'),
   RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(100),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
@@ -35,6 +36,7 @@ export interface AppConfig {
   jwtRefreshTtlDays: number;
   corsOrigins: (string | RegExp)[];
   otelEndpoint?: string;
+  otelHeaders?: Record<string, string>;
   otelServiceName: string;
   rateLimitMax: number;
   rateLimitWindowMs: number;
@@ -76,8 +78,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     jwtRefreshTtlDays: parsed.JWT_REFRESH_TTL_DAYS,
     corsOrigins,
     otelEndpoint: parsed.OTEL_EXPORTER_OTLP_ENDPOINT || undefined,
+    otelHeaders: parseOtelHeaders(parsed.OTEL_EXPORTER_OTLP_HEADERS),
     otelServiceName: parsed.OTEL_SERVICE_NAME,
     rateLimitMax: parsed.RATE_LIMIT_MAX,
     rateLimitWindowMs: parsed.RATE_LIMIT_WINDOW_MS,
   };
+}
+
+export function parseOtelHeaders(raw?: string): Record<string, string> | undefined {
+  if (!raw?.trim()) return undefined;
+  const headers: Record<string, string> = {};
+  for (const part of raw.split(',')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const rawVal = part.slice(idx + 1).trim();
+    if (!key || !rawVal) continue;
+    let val = rawVal;
+    try {
+      val = decodeURIComponent(rawVal);
+    } catch {
+      val = rawVal;
+    }
+    headers[key] = val;
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function resolveOtelTracesUrl(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  return trimmed.endsWith('/v1/traces') ? trimmed : `${trimmed}/v1/traces`;
 }

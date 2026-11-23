@@ -52,6 +52,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       OTEL_SERVICE_NAME: core-service
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.core.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`/v1/core`)"
@@ -87,6 +88,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       OTEL_SERVICE_NAME: media-service
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.media.rule=(Host(`api.mikeodnis.dev`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`/v1/media`)"
