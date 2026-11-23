@@ -173,7 +173,7 @@ jobs:
     name: Deploy OpenAPI Specs to R2
     needs: [build-core, build-media, build-health]
     runs-on: ubuntu-latest
-    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && secrets.CLOUDFLARE_API_TOKEN != ''
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -186,46 +186,16 @@ jobs:
           bun install --frozen-lockfile
           bun run export-openapi dist/openapi.json
 
-      - name: Upload to R2
+      - name: Upload to R2 (when configured)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          bunx wrangler r2 object put "${{ secrets.R2_BUCKET }}/assets/openapi/core.json" \
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$R2_BUCKET" ]; then
+            echo "Skipping R2 OpenAPI upload (CLOUDFLARE_API_TOKEN or R2_BUCKET secret not set)"
+            exit 0
+          fi
+          bunx wrangler r2 object put "${R2_BUCKET}/assets/openapi/core.json" \
             --file=services/core/dist/openapi.json \
             --content-type=application/json
-
-  deploy-production:
-    name: Deploy to Production
-    needs: [build-core, build-media, build-health]
-    runs-on: ubuntu-latest
-    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && secrets.DEPLOY_HOST != ''
-    environment:
-      name: production
-      url: https://api.mikeodnis.dev
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_KEY }}
-          script: |
-            cd /opt/api
-            git pull origin "${{ github.ref_name }}"
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
-            docker system prune -f
-
-      - name: Health Check
-        run: |
-          sleep 30
-          curl -fsS https://api.mikeodnis.dev/health || exit 1
-
-      - name: Notify BetterStack
-        if: always() && secrets.BETTERSTACK_HEARTBEAT_URL != ''
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: ${{ secrets.BETTERSTACK_HEARTBEAT_URL }}
-          method: 'GET'
