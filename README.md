@@ -1,94 +1,102 @@
 # API Infrastructure — `api.mikeodnis.dev`
 
-Production-ready, polyglot API platform engineered to run alongside [`cdn.mikeodnis.dev`](https://github.com/WomB0ComB0/cdn).
+Production polyglot API platform hosted end-to-end on **Railway (US East)** alongside the Hexagonal Edge CDN [`WomB0ComB0/cdn`](https://github.com/WomB0ComB0/cdn) (**Cloudflare Workers + R2**), with native **Axiom OpenTelemetry** distributed tracing and automated CI/CD.
 
-- **Core Service (`/v1/core/*`)** — **Bun + Elysia** (feature modules, named auth/admin macros, Argon2id + HS256 JWTs with Hasura claims, rotating refresh tokens, scoped API keys, OpenAPI 3.1 + Scalar UI, Eden Treaty end-to-end type safety, Server-Timing, OpenTelemetry).
-- **Media Service (`/v1/media/*`)** — **Go (Hexagonal / Ports & Adapters + DDD)** with `chi`, `pgx/v5`, Cloudflare R2 S3 SDK v2, domain events, HMAC-SHA256 private CDN URL signing, Cloudflare cache purging, and automated Go AST hexagonal boundary tests.
-- **Links Service (`/v1/links/*`)** — **Hasura GraphQL Engine** with auto-applied metadata, row-level JWT permissions, and production allow-lists.
-- **Health Aggregator (`/health`)** — **Zero-dependency Python 3.12** stdlib concurrent upstream probe with per-service latency reporting.
-- **Edge CDN (`cdn.mikeodnis.dev`)** — **Cloudflare Worker (ES Module) + R2** serving public immutable `/assets/*`, HMAC-verified `/private/*`, and `/img/*` transforms.
+| Service | Route | Runtime & Stack | Key Capabilities |
+| :--- | :--- | :--- | :--- |
+| **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.9** | TLS termination, `zstd`/`gzip`, HSTS preload, Permissions-Policy, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`) |
+| **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs, 1-CTE refresh rotation, scoped `mk_live_*` API keys, O(1) `LRUCache` rate limiter, CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI, Eden Treaty |
+| **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/` & `private/`), HMAC-SHA256 private CDN signing, presigned direct PUTs, domain event bus, AST boundary enforcement |
+| **Links Service** | `/v1/links/*` | **Hasura GraphQL Engine** | Baked v3 metadata (`cli-migrations-v3`), JWT role/row permissions, `limit: 100` caps, production allow-list, single-query lateral-join compilation |
+| **Health Aggregator** | `/health` | **Python 3.12 (stdlib)** | Zero-dependency dual-stack IPv6/IPv4 server, shared thread pool, 2s coalesced probe cache (anti-thundering-herd), `GET`/`HEAD` support, graceful `SIGTERM` |
+| **Database** | Internal (`*.railway.internal`) | **PostgreSQL 18** | Multi-schema (`core`, `media`, `links`), auto-idempotent bootstrap, composite pagination indexes |
+| **Observability** | US East Edge OTLP | **Axiom (`otel:traces:v1`)** | Direct OTLP/HTTP trace export (`core-service` + `media-service`) via least-privilege ingest token |
 
 ---
 
-## System Architecture
+## System Topology (Production)
 
 ```mermaid
 flowchart TB
     Client["Web / Mobile / CLI Clients"]
+    DNS["Vercel DNS (mikeodnis.dev)"]
 
-    subgraph Edge["Cloudflare Edge"]
-        DNS["Cloudflare DNS & WAF"]
-        Worker["cdn.mikeodnis.dev Worker (ES Module)"]
-        R2[("Cloudflare R2 Bucket")]
-    end
-
-    subgraph API["api.mikeodnis.dev"]
-        GW["API Gateway (Traefik / Caddy)"]
+    subgraph Railway["Railway Production (US East — Private IPv6 Mesh)"]
+        GW["Caddy Gateway\nHSTS · zstd/gzip · Keepalive · 3s Retry"]
 
         subgraph Services["Polyglot Microservices"]
-            Core["Core Service (Bun + Elysia) /v1/core/*"]
-            Media["Media Service (Go Hexagonal) /v1/media/*"]
-            Hasura["Hasura GraphQL /v1/links/*"]
-            Health["Health Aggregator (Python) /health"]
+            Core["Core Service\nBun + Elysia (/v1/core/*)"]
+            Media["Media Service\nGo 1.26 Hexagonal (/v1/media/*)"]
+            Hasura["Hasura GraphQL\n(/v1/links/*)"]
+            Health["Health Aggregator\nPython 3.12 · 2s Cache (/health)"]
         end
 
-        PG[("PostgreSQL 16 (core, media, links)")]
-        OTEL["OTel Collector + Jaeger :16686"]
+        PG[("PostgreSQL 18\nschemas: core, media, links")]
     end
 
-    Client -->|"HTTPS API"| DNS --> GW
-    Client -->|"HTTPS CDN (public & signed private)"| Worker --> R2
+    subgraph Cloudflare["Cloudflare Edge (WomB0ComB0/cdn)"]
+        Worker["cdn-worker\nHexagonal TS Worker"]
+        Cache["Edge Cache\n(caches.default)"]
+        R2[("Cloudflare R2\nBucket: cdn")]
+    end
 
+    Axiom["Axiom OTLP US-East Edge\nDataset: api-mikeodnis-dev-traces"]
+
+    Client -->|"HTTPS api.mikeodnis.dev & cdn.mikeodnis.dev"| DNS --> GW
     GW -->|"/v1/core/*"| Core
     GW -->|"/v1/media/*"| Media
     GW -->|"/v1/links/*"| Hasura
-    GW -->|"/health"| Health
+    GW -->|"/health (GET/HEAD)"| Health
+    GW -->|"Host: cdn.mikeodnis.dev"| Worker
 
-    Core -->|"Atomic CTE SQL (pg)"| PG
-    Media -->|"Batched & Window SQL (pgx)"| PG
-    Media -->|"Put / Presign / Delete"| R2
-    Media -.->|"Purge Edge Cache API"| Edge
+    Core -->|"Atomic CTE SQL (pg pool)"| PG
+    Media -->|"Window & Batched SQL (pgxpool)"| PG
     Hasura -->|"Compiled Lateral-Join SQL"| PG
+    Media -->|"HTTP/2 S3 API (Put / Presign / Delete)"| R2
+
+    Worker <--> Cache
+    Worker -->|"Native R2_BUCKET binding"| R2
 
     Health --> Core
     Health --> Media
     Health --> Hasura
 
-    Core -.->|"OTLP Traces"| OTEL
-    Media -.->|"OTLP Traces"| OTEL
+    Core -.->|"OTLP/HTTP Traces"| Axiom
+    Media -.->|"OTLP/HTTP Protobuf Traces"| Axiom
 ```
 
 ---
 
 ## Go Media Service — Hexagonal Architecture
 
-`services/media` implements **Ports & Adapters (Hexagonal Architecture) + DDD**, inspired by [go-hexagonal](https://github.com/WomB0ComB0/go-hexagonal). Dependencies strictly point **inward** toward the domain core and are enforced automatically on every test run via Go AST inspection in [architecture_test.go](file:///home/wombocombo/github/prs/api/services/media/architecture_test.go).
+`services/media` implements **Ports & Adapters (Hexagonal Architecture) + DDD**, modeled after [`WomB0ComB0/go-hexagonal`](https://github.com/WomB0ComB0/go-hexagonal). Dependencies strictly point **inward** toward the domain core and are enforced automatically on every `go test` run via Go AST inspection in [`services/media/architecture_test.go`](./services/media/architecture_test.go).
 
 ```mermaid
 flowchart LR
     subgraph Primary["Primary / Driving Adapter (internal/api/http)"]
-        Router["Chi Router + JWT Middleware"]
+        Router["Chi Router · httprate · CORS · otelhttp"]
+        AuthMW["JWTAuth Middleware (HS256 pinned)"]
         Handlers["Thin HTTP Handlers + AppError Mapper"]
-        Router --> Handlers
+        Router --> AuthMW --> Handlers
     end
 
     subgraph App["Application Layer (internal/application)"]
         Factory["Application Factory"]
-        UC["Use Cases: Upload, Presign, Confirm, Get, List, Delete, SignURL, PurgeCache"]
+        UC["Use Cases\nUpload · Presign · Confirm · Get · List · Delete · SignURL · PurgeCache"]
         Factory --> UC
     end
 
     subgraph Domain["Domain Core (internal/domain) — Zero External SDKs"]
-        Model["Asset Aggregate & Value Objects (Visibility, Filename, OwnedKey)"]
-        Bus["Domain Event Bus (AssetUploadedEvent, AssetDeletedEvent)"]
-        Ports["Outbound Ports (AssetRepository, ObjectStore, URLSigner, CachePurger)"]
+        Model["Asset Aggregate & Value Objects\nVisibility · Filename · OwnedKey"]
+        Bus["Domain Event Bus\nAssetUploadedEvent · AssetDeletedEvent"]
+        Ports["Outbound Ports\nAssetRepository · ObjectStore · URLSigner · CachePurger"]
     end
 
     subgraph Secondary["Secondary / Driven Adapters (internal/adapter)"]
-        PGAdapter["postgres.AssetRepository (pgx/v5)"]
-        R2Adapter["r2.ObjectStore (AWS SDK v2)"]
-        CFAdapter["cloudflare.URLSigner & CachePurger + PurgeSubscriber"]
-        OtelAdapter["telemetry.InitTelemetry (OTLP)"]
+        PGAdapter["postgres.AssetRepository\npgxpool · statement_timeout=10s"]
+        R2Adapter["r2.ObjectStore\nAWS SDK v2 · HTTP/2 · 3x Retries"]
+        CFAdapter["cloudflare.URLSigner & CachePurger\nHMAC-SHA256 + PurgeSubscriber"]
+        OtelAdapter["telemetry.InitTelemetry\nOTLP/HTTP + Header Auth"]
     end
 
     Handlers --> Factory
@@ -104,28 +112,34 @@ flowchart LR
 
 ---
 
-## Core Service — Elysia Request Lifecycle & Modules
+## Core Service — Elysia Lifecycle & `@resq-systems/*` Integration
 
-`services/core` follows official [ElysiaJS best practices](https://elysiajs.com/essential/best-practice): feature-based modules (`controller` + `service` + TypeBox `model`), named deduplicated auth/admin macros, `return status(...)` for end-to-end **Eden Treaty** + **OpenAPI 3.1** inference, and single-roundtrip atomic SQL CTEs.
+`services/core` follows official [ElysiaJS best practices](https://elysiajs.com/essential/best-practice) (feature modules with decoupled `service.ts`, TypeBox `model.ts`, named auth/admin macros, and Eden Treaty inference) powered by [`@resq-systems/*`](https://github.com/resq-software/npm) packages:
+
+- **`@resq-systems/logger`**: Structured JSON logging (`JsonTransport`) in production and colorized logs in dev.
+- **`@resq-systems/dsa`**: O(1) bounded `LRUCache` (`maxSize: 10_000`, lazy TTL) backing the global IP rate limiter.
+- **`@resq-systems/security`**: `generateSecureToken` & `hashData` (`Sha256Hex`) for refresh tokens and API keys, `encodeLogValue` + `sanitizeForLogging` (CWE-117 log/ANSI injection & secret scrubbing), and `containsBidiControls` (CVE-2021-42574 Trojan Source protection).
+- **`@resq-systems/types`**: Branded numeric bounds (`toPositiveInt`) and runtime guards (`isNonEmptyString`).
 
 ```mermaid
 flowchart LR
     Req["Incoming HTTP Request"]
-    Log["Request Logger (X-Request-ID, IP, duration)"]
-    Sec["Security Headers (CSP, HSTS, Frame-Options)"]
-    ST["Server-Timing + CORS + Rate Limit"]
-    Macro["Auth / Admin Macro (@elysiajs/bearer + @elysiajs/jwt + Atomic API Key)"]
+    OTel["@elysiajs/opentelemetry\n(Axiom OTLP Span)"]
+    Log["Request Logger\n@resq-systems/logger + CWE-117 encodeLogValue"]
+    Sec["Security Headers\nCSP · HSTS · Frame-Options · Permissions-Policy"]
+    RL["Rate Limit + CORS + Server-Timing\n@resq-systems/dsa LRUCache (O(1) bounded)"]
+    Macro["Named Auth / Admin Macro\nHS256 JWT or Atomic API Key UPDATE"]
 
     subgraph Modules["Feature Modules (/v1/core)"]
-        Util["utility (/, /status, /version, /info)"]
-        Hlth["health (/health, /health/ready)"]
-        Auth["auth (/register, /login, /refresh, /logout, /me, /api-keys)"]
-        Users["users (/users, /users/:id)"]
+        Util["utility\n/ · /status · /version · /info"]
+        Hlth["health\n/health · /health/ready"]
+        Auth["auth\n/register · /login · /refresh · /logout · /me · /api-keys"]
+        Users["users\n/users · /users/:id (RBAC)"]
     end
 
-    DB[("PostgreSQL (core schema)")]
+    DB[("PostgreSQL 18\ncore schema")]
 
-    Req --> Log --> Sec --> ST --> Macro
+    Req --> OTel --> Log --> Sec --> RL --> Macro
     Macro --> Util
     Macro --> Hlth
     Macro --> Auth
@@ -137,43 +151,58 @@ flowchart LR
 
 ---
 
-## End-to-End Auth, Private Media & CDN Purge Flow
+## End-to-End Auth, Upload, Presigned PUT & Private CDN Flow
 
 ```mermaid
 sequenceDiagram
     actor Client
     participant Core as Core API (/v1/core)
     participant Media as Media API (/v1/media)
-    participant R2 as Cloudflare R2
-    participant PG as PostgreSQL
+    participant R2 as Cloudflare R2 (cdn)
+    participant PG as PostgreSQL 18
     participant CDN as cdn.mikeodnis.dev Worker
 
     Client->>Core: POST /v1/core/auth/login
-    Core->>PG: Verify Argon2id + store refresh token
+    Core->>PG: Constant-time Argon2id verify + store refresh token
     Core-->>Client: HS256 JWT (sub, role, Hasura claims) + refresh_token
 
-    Client->>Media: POST /v1/media/upload (Bearer JWT, visibility=private)
-    Media->>R2: PutObject private/<user_id>/<sha256>.pdf
-    Media->>PG: Upsert media.assets row
-    Media-->>Client: AssetDTO + HMAC-signed CDN URL (?exp=...&sig=...)
+    rect rgba(56, 142, 235, 0.08)
+        Note over Client,CDN: Path A — Private Upload + HMAC Signed Delivery
+        Client->>Media: POST /v1/media/upload (Bearer JWT, visibility=private)
+        Media->>R2: PutObject private/<user_id>/<sha256>.ext
+        Media->>PG: Upsert media.assets row
+        Media-->>Client: AssetDTO + HMAC-SHA256 signed URL (?exp=...&sig=...)
+        Client->>CDN: GET /private/<user_id>/<sha256>.ext?exp=...&sig=...
+        CDN->>CDN: Isolate-cached CryptoKey timing-safe HMAC verify
+        CDN->>R2: R2_BUCKET.get(key, { range })
+        CDN-->>Client: 200 / 206 Streamed private asset (Cache-Control: private)
+    end
 
-    Client->>CDN: GET /private/<user_id>/<sha256>.pdf?exp=...&sig=...
-    CDN->>CDN: Constant-time HMAC-SHA256 verification (SIGNING_SECRET)
-    CDN->>R2: R2_BUCKET.get(key, { range })
-    CDN-->>Client: 200 / 206 Streamed private asset
+    rect rgba(37, 198, 138, 0.08)
+        Note over Client,CDN: Path B — Direct-to-R2 Presigned PUT + Confirm
+        Client->>Media: POST /v1/media/presign { filename, content_type, visibility }
+        Media-->>Client: { upload_url (15m S3 presigned PUT), key }
+        Client->>R2: PUT upload_url (direct binary stream)
+        Client->>Media: POST /v1/media/assets/confirm { key, filename }
+        Media->>R2: HeadObject (verify size, ETag, content_type)
+        Media->>PG: Upsert media.assets row
+        Media-->>Client: 201 Created (AssetDTO)
+    end
 
     Client->>Media: DELETE /v1/media/assets/{id} (Bearer JWT)
     Media->>R2: DeleteObject
     Media->>PG: Delete media.assets row
-    Media->>CDN: AssetDeletedEvent -> Cloudflare Purge Cache API (public assets)
-    Media-->>Client: 204 No Content
+    Media-->>Client: 204 No Content (emits AssetDeletedEvent)
 ```
 
 ---
 
 ## Database Schema (N+1-Free & Indexed)
 
-All endpoints run in **O(1)** database roundtrips using atomic CTEs (`register`, `refresh`, `api_key` auth), window functions (`COUNT(*) OVER()`), batched lookups (`WHERE id = ANY($1::uuid[])`), and composite indexes on `(user_id, created_at DESC)` and `(link_id, clicked_at DESC)`.
+Every query across `core`, `media`, and `links` executes in **O(1)** database roundtrips:
+- **Core**: `register` & `refresh` run as **1 atomic CTE**; API-key auth runs as **1 atomic `UPDATE ... FROM` join**; `users.list` uses **`COUNT(*) OVER()`**; `listApiKeys` is bounded (`LIMIT 100`). Verified by query-count assertions in [`services/core/src/__tests__/app.test.ts`](./services/core/src/__tests__/app.test.ts).
+- **Media**: `ListByUser` uses **`COUNT(*) OVER()`** (1 query on `idx_assets_user_created`); `FindByIDs` batches via `WHERE id = ANY($1::uuid[])`. Verified by `TestListAssetsIsNPlusOneFree`.
+- **Hasura**: Compiles nested GraphQL queries (`links → clicks`, `links → user`) into a single lateral-join SQL query, capped at `limit: 100` per table permission.
 
 ```mermaid
 erDiagram
@@ -250,101 +279,127 @@ erDiagram
 
 ---
 
+## Automated CI/CD & Security Pipeline
+
+```mermaid
+flowchart LR
+    Trigger["Push / PR / Schedule"]
+
+    subgraph CI["CI/CD Pipeline (.github/workflows/ci-cd.yml)"]
+        Filter["Detect Changed Services\n(dorny/paths-filter)"]
+
+        subgraph ParallelTests["Parallel Verification"]
+            TC["test-core\nBun typecheck · test · compile · OpenAPI"]
+            TM["test-media\nGo 1.26.11 vet · -race · AST boundary"]
+            TH["test-health\nPython unittest · cache & HEAD tests"]
+            TI["validate-infra\nCompose dev+prod · Caddyfile validate"]
+        end
+
+        Build["Matrix Docker Build & Push (GHCR)\ncore · media · health · gateway · hasura\n(GHA Buildx layer cache)"]
+        Deploy["Deploy Changed Services\nRailway CLI (RAILWAY_TOKEN)"]
+        Smoke["Post-Deploy Live Smoke Test\n/health · /ready · /openapi.json · HSTS"]
+    end
+
+    subgraph Sec["Security Scan (.github/workflows/security.yml)"]
+        BA["bun audit --audit-level=high"]
+        GV["govulncheck ./..."]
+        SL["Committed Secret / .env Guard"]
+    end
+
+    Trigger --> Filter
+    Filter --> TC & TM & TH & TI
+    TC & TM & TH & TI --> Build --> Deploy --> Smoke
+    Trigger --> BA & GV & SL
+```
+
+Weekly grouped dependency PRs are managed automatically via [`.github/dependabot.yml`](./.github/dependabot.yml) across `npm`, `gomod`, `docker`, and `github-actions`.
+
+---
+
+## Security, Performance & Reliability Posture
+
+- **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`).
+- **Authentication & Abuse Prevention**: Argon2id password hashing with constant-time dummy verification on login (prevents email enumeration), HS256 JWT algorithm pinning, atomic refresh-token rotation, Trojan Source bidi rejection (`containsBidiControls`), CWE-117 log/ANSI escaping (`encodeLogValue`), bounded O(1) LRU IP rate limiting, and `1 MiB` request/header caps.
+- **Connection & Upstream Resilience**:
+  - `core-service`: `pg.Pool` idle error listener (crash-proof on DB restart), `statement_timeout: 10s`, `query_timeout: 12s`, TCP `keepAlive`, `maxUses: 7500`.
+  - `media-service`: `pgxpool` `HealthCheckPeriod: 30s`, `MaxConnLifetime: 30m`, `statement_timeout: 10s`, Slowloris `ReadHeaderTimeout: 10s`, HTTP/2 R2 transport with `3x` standard retries.
+  - `health-aggregator`: shared thread pool, 2s coalesced cache (prevents probe storms), `GET`/`HEAD` support, graceful `SIGTERM`.
+  - `gateway`: Caddy `lb_try_duration 3s` / `lb_try_interval 250ms` (absorbs rolling container restarts), HTTP keepalive pools (`64`/`32`), HSTS preload + security headers.
+
+---
+
 ## API Endpoints
 
 ### Core Service (`/v1/core`)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET`/`HEAD` | `/v1/core`, `/status`, `/version`, `/info` | Public | Root, runtime memory/uptime, version, and metadata |
+| `GET`/`HEAD` | `/v1/core`, `/status`, `/version`, `/info` | Public | Root, runtime memory/uptime, version, metadata |
 | `GET`/`HEAD` | `/v1/core/health`, `/v1/core/health/ready` | Public | Liveness & PostgreSQL readiness probes |
-| `GET` | `/v1/core/docs`, `/v1/core/openapi.json` | Public | Scalar OpenAPI 3.1 UI & raw JSON specification |
+| `GET` | `/v1/core/docs`, `/v1/core/openapi.json` | Public | Scalar OpenAPI 3.1 UI & raw JSON spec |
 | `POST` | `/v1/core/auth/register` | Public | Create account + issue JWT & refresh token (1 CTE) |
-| `POST` | `/v1/core/auth/login` | Public | Verify Argon2id password + issue JWT & refresh token |
+| `POST` | `/v1/core/auth/login` | Public | Constant-time Argon2id verify + issue token pair |
 | `POST` | `/v1/core/auth/refresh` | Public | Atomically rotate refresh token (1 CTE) |
 | `POST` | `/v1/core/auth/logout` | Public | Revoke refresh token |
 | `GET` | `/v1/core/auth/me` | JWT / API Key | Current authenticated user profile |
-| `POST`/`GET`/`DELETE` | `/v1/core/auth/api-keys`, `/api-keys/:id` | JWT | Create, list, and revoke scoped `mk_live_*` keys |
+| `POST`/`GET`/`DELETE` | `/v1/core/auth/api-keys`, `/api-keys/:id` | JWT | Create, list (`LIMIT 100`), and revoke scoped `mk_live_*` keys |
 | `GET` | `/v1/core/users` | Admin JWT | Paginated user list with `total` (`COUNT(*) OVER()`) |
-| `GET`/`PATCH`/`DELETE` | `/v1/core/users/:id` | Self or Admin | Read, update, or delete user |
+| `GET`/`PATCH`/`DELETE` | `/v1/core/users/:id` | Self / Admin | Read, update, or delete user |
 
 ### Media Service (`/v1/media`)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/v1/media/health`, `/health/ready`, `/openapi.json` | Public | Liveness, R2+DB readiness, OpenAPI 3.0.3 spec |
+| `GET` | `/v1/media/health`, `/health/ready`, `/openapi.json` | Public | Liveness, Postgres+R2 readiness, OpenAPI spec |
 | `POST` | `/v1/media/upload` | JWT | Multipart upload to R2 (`assets/` or `private/`) + DB record |
-| `POST` | `/v1/media/presign` | JWT | Direct-to-R2 15-minute presigned PUT URL |
+| `POST` | `/v1/media/presign` | JWT | Direct-to-R2 15m presigned PUT URL (blocks HTML/JS MIME) |
 | `POST` | `/v1/media/assets/confirm` | JWT | Verify presigned object via `HeadObject` and persist metadata |
 | `POST` | `/v1/media/sign` | JWT | Generate HMAC-SHA256 signed `cdn.mikeodnis.dev/private/*` URL |
 | `POST` | `/v1/media/purge` | JWT | Purge Cloudflare edge cache (owner-scoped or admin) |
 | `GET` | `/v1/media/assets` | JWT | Paginated asset list with `total` (`COUNT(*) OVER()`) |
-| `GET`/`DELETE` | `/v1/media/assets/:id` | Owner / Admin | Fetch metadata or delete from R2 + DB + event-driven CDN purge |
+| `GET`/`DELETE` | `/v1/media/assets/:id` | Owner / Admin | Fetch metadata or delete from R2 + DB + event-driven purge |
 
 ### Links Service (`/v1/links`) & Aggregate Health (`/health`)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/links/v1/graphql` | Anonymous / JWT | Hasura GraphQL endpoint (allow-listed in prod) |
+| `POST` | `/v1/links/v1/graphql` | Anonymous / JWT | Hasura GraphQL endpoint (allow-listed, `limit: 100` capped) |
 | `GET` | `/v1/links/healthz` | Public | Hasura health probe |
-| `GET` | `/health` | Public | Concurrent aggregate health across Core, Media, and Hasura |
+| `GET`/`HEAD` | `/health` | Public | Coalesced concurrent aggregate health across Core, Media, Hasura |
 
 ---
 
-## Quick Start (Local Development)
+## Quick Start & Observability
 
 ### Prerequisites
-- [Docker](https://docs.docker.com/) + Docker Compose v2
-- [Bun](https://bun.sh/) 1.4+, [Go](https://go.dev/) 1.25+, Python 3.12+ (for local testing outside Docker)
+- [Bun](https://bun.sh/) `1.4+`, [Go](https://go.dev/) `1.26.11+`, Python `3.12+`
+- [Docker](https://docs.docker.com/) + Compose v2 (for local full-stack)
 
 ```bash
-# 1. Generate .env with secure random secrets (JWT_SECRET, SIGNING_SECRET, DB password)
+# 1. Generate local .env with secure random secrets
 ./setup.sh
 
-# 2. Fill in CLOUDFLARE_R2_* credentials in .env, then boot the stack
-make dev
+# 2. Run all test suites locally
+(cd services/core && bun install && bun run typecheck && bun test)
+(cd services/media && go vet ./... && go test -race ./...)
+(cd services/health && python3 -m unittest discover -v)
 
-# Optional: boot with OpenTelemetry Collector + Jaeger UI (http://localhost:16686)
-make dev-obs
-
-# 3. Verify all services
-make health
-./scripts/test-api.sh http://localhost
+# 3. Start full local stack (add --profile observability for local Jaeger :16686)
+docker compose up -d --build
 ```
 
-### Running Tests Locally
+### Live Observability (Axiom CLI)
 
 ```bash
-# Run all service tests (Core Elysia + Eden Treaty, Go Hexagonal + AST boundary check, Python Health)
-make test
-
-# Individual suites
-make test-core     # bun test && bun run typecheck
-make test-media    # go vet ./... && go test -race -v ./...
-make test-health   # python3 -m unittest discover -v
+# Query live production OTel traces from core-service and media-service
+axiom query "['api-mikeodnis-dev-traces'] | summarize spans=count() by ['service.name']" --start-time="-30m"
+axiom query "['api-mikeodnis-dev-traces'] | project _time, ['service.name'], name, duration | limit 20" --start-time="-30m"
 ```
-
----
-
-## End-to-End Hosting
-
-Two complete, production-ready hosting paths are included — see [docs/DEPLOYMENT.md](file:///home/wombocombo/github/prs/api/docs/DEPLOYMENT.md) for the step-by-step runbook:
-
-1. **Managed PaaS (Railway + Cloudflare Workers/R2)** — Zero server maintenance:
-   - Each service ships with a `Dockerfile` and `railway.toml` (`services/gateway`, `services/core`, `services/media`, `services/health`, `hasura`) plus `scripts/db-init.sh` for Railway PostgreSQL.
-   - `services/gateway` (Caddy) routes `api.mikeodnis.dev` across Railway private networking (`*.railway.internal`).
-   - `cdn.mikeodnis.dev` deploys to Cloudflare Workers via `bunx wrangler deploy` using `wrangler.jsonc`.
-2. **Single VPS (Docker Compose + Traefik + Let's Encrypt + Cloudflare Workers/R2)** — Lowest cost (~$5–$20/mo):
-   - Uses `docker-compose.yml` + `docker-compose.prod.yml` with `traefik/traefik.prod.yml` for automatic HTTPS, HTTP→HTTPS redirects, and container scaling (`replicas: 2`).
 
 ---
 
 ## Documentation
-
-- [docs/ARCHITECTURE.md](file:///home/wombocombo/github/prs/api/docs/ARCHITECTURE.md) — System design, hexagonal rules, N+1-free SQL patterns, and CDN contract
-- [docs/DEPLOYMENT.md](file:///home/wombocombo/github/prs/api/docs/DEPLOYMENT.md) — Complete Railway + Cloudflare and VPS + Traefik hosting runbooks
-- [docs/API.md](file:///home/wombocombo/github/prs/api/docs/API.md) — Detailed API reference
-- [CONTRIBUTING.md](file:///home/wombocombo/github/prs/api/CONTRIBUTING.md) — Development workflow
-
----
+- [Architecture Deep Dive](./docs/ARCHITECTURE.md)
+- [Production Deployment Guide](./docs/DEPLOYMENT.md)
+- [Quick Reference](./docs/QUICK_REFERENCE.md)
 
 ## License
 
-Apache License 2.0 — see [LICENSE](file:///home/wombocombo/github/prs/api/LICENSE).
+Apache-2.0
