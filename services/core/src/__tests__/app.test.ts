@@ -351,6 +351,7 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     // HEAD probes & security/observability headers
     const rawHealth = await app.handle(new Request('http://localhost/v1/core/health'));
     expect(rawHealth.status).toBe(200);
+    expect(rawHealth.headers.get('cache-control')).toBe('no-store');
     expect(rawHealth.headers.get('x-frame-options')).toBe('DENY');
     expect(rawHealth.headers.get('x-content-type-options')).toBe('nosniff');
     expect(rawHealth.headers.get('strict-transport-security')).toContain('max-age=31536000');

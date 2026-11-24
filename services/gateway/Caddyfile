@@ -137,12 +137,33 @@
 		}
 	}
 
-	@links path /v1/links /v1/links/*
-	handle @links {
-		uri strip_prefix /v1/links
+	# Fail-closed Hasura allowlist: expose ONLY public GraphQL + healthz and strip admin secret header
+	# so /v1/metadata, /v1/query, /v2/query, /v1/version, /console, and admin-secret brute-forcing are blocked at the gateway.
+	@links_graphql path /v1/links/v1/graphql /v1/links/graphql
+	handle @links_graphql {
+		rewrite * /v1/graphql
 		reverse_proxy {$HASURA_UPSTREAM:hasura.railway.internal:8080} {
+			header_up -X-Hasura-Admin-Secret
+			header_up -X-Hasura-Access-Key
 			import proxy_defaults
 		}
+	}
+
+	@links_health path /v1/links/healthz
+	handle @links_health {
+		rewrite * /healthz
+		reverse_proxy {$HASURA_UPSTREAM:hasura.railway.internal:8080} {
+			header_up -X-Hasura-Admin-Secret
+			header_up -X-Hasura-Access-Key
+			import proxy_defaults
+		}
+	}
+
+	@links_blocked path /v1/links /v1/links/*
+	handle @links_blocked {
+		header Content-Type application/json
+		header Cache-Control "no-store"
+		respond `{"error":"Not found"}` 404
 	}
 
 	@root_html {

@@ -36,7 +36,12 @@ export function createSecurityHeadersPlugin() {
     set.headers['permissions-policy'] = 'camera=(), microphone=(), geolocation=()';
     set.headers['strict-transport-security'] = 'max-age=31536000; includeSubDomains; preload';
     set.headers['content-security-policy'] = pathname.startsWith('/v1/core/docs') ? CSP_DOCS : CSP_API;
-    if (pathname.startsWith('/v1/core/auth') || pathname.startsWith('/v1/core/users')) {
+    if (
+      pathname.startsWith('/v1/core/auth') ||
+      pathname.startsWith('/v1/core/users') ||
+      pathname === '/v1/core/status' ||
+      pathname.startsWith('/v1/core/health')
+    ) {
       set.headers['cache-control'] = 'no-store';
     }
   });
