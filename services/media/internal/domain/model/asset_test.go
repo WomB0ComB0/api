@@ -35,6 +35,22 @@ func TestValueObjectsAndInvariants(t *testing.T) {
 	if _, err := ValidateOwnedKey("assets/u2/file.png", "u1"); !apperr.IsType(err, apperr.TypeForbidden) {
 		t.Fatalf("expected forbidden for other user's key, got %v", err)
 	}
+	// Query/fragment injection, empty leaf, double-slash, and bidi controls in keys must be rejected
+	for _, badKey := range []string{
+		"private/u1/",
+		"private/u1/file.png?admin=1",
+		"private/u1/file.png#frag",
+		"private/u1/file%2e%2e.png",
+		"private/u1/a//b.png",
+		"private/u1/bad\u202E.png",
+	} {
+		if _, err := ValidateOwnedKey(badKey, "u1"); !apperr.IsType(err, apperr.TypeValidation) {
+			t.Fatalf("expected validation error for unsafe key %q, got %v", badKey, err)
+		}
+	}
+	if _, _, err := ValidateStagingKey("staging/assets/u1/sub/nested.png", "u1"); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected nested staging key rejection, got %v", err)
+	}
 
 	asset, err := NewAsset("u1", fn, "image/png", 128, "assets/u1/abc.png", "https://cdn.mikeodnis.dev/assets/u1/abc.png", VisibilityPublic, "etag", "sha", nil)
 	if err != nil {

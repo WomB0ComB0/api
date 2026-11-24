@@ -139,7 +139,8 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		return nil, apperr.TooLarge("SVG file exceeds maximum allowed size (2 MiB)")
 	}
 
-	readLimit := int64(512)
+	// Read 512 + 1 sentinel byte for non-SVG objects so split multi-byte UTF-8 runes at byte 512 are recognized.
+	readLimit := int64(513)
 	if filename.Ext == ".svg" {
 		readLimit = model.MaxSVGBytes
 	}

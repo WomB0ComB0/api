@@ -159,7 +159,9 @@ func (l *SlidingWindowLimiter) Middleware(
 
 			if !allowed {
 				w.Header().Set("Retry-After", strconv.Itoa(deltaSec))
-				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.Header().Set("Cache-Control", "no-store")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"error":               "Too many requests",

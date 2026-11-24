@@ -204,6 +204,8 @@ func (h *MediaHandler) DeleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
 

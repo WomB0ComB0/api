@@ -459,7 +459,73 @@ func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
 	if _, stillLive := store.objects[liveAsset.Key]; !stillLive {
 		t.Fatalf("transient DB failure on duplicate re-upload destroyed pre-existing live R2 object!")
 	}
+
+	// 8. Nemesis Round 7: UploadUseCase & ConfirmUploadUseCase must accept valid >512B UTF-8 text and SVG
+	// whose multi-byte UTF-8 rune straddles byte 511-512 (proving 513-byte sentinel sniff works).
+	splitUTF8Txt := append(bytes.Repeat([]byte("a"), 510), []byte("🚀 trailing text")...)
+	if _, err := factory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:             u1,
+		Filename:          "notes.txt",
+		HeaderContentType: "text/plain",
+		File:              bytes.NewReader(splitUTF8Txt),
+	}); err != nil {
+		t.Fatalf("expected >512B UTF-8 text with split rune at byte 512 to upload cleanly, got %v", err)
+	}
+	svgHead := `<svg xmlns="http://www.w3.org/2000/svg"><desc>`
+	splitUTF8SVG := []byte(svgHead + strings.Repeat("a", 510-len(svgHead)) + "🚀</desc></svg>")
+	if _, err := factory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:             u1,
+		Filename:          "emoji.svg",
+		HeaderContentType: "image/svg+xml",
+		File:              bytes.NewReader(splitUTF8SVG),
+	}); err != nil {
+		t.Fatalf("expected >512B UTF-8 SVG with split rune at byte 512 to upload cleanly, got %v", err)
+	}
+	preTxt, err := factory.PresignUpload().Execute(context.Background(), media.PresignInput{
+		Actor:       u1,
+		Filename:    "notes.txt",
+		ContentType: "text/plain",
+	})
+	if err != nil {
+		t.Fatalf("presign txt failed: %v", err)
+	}
+	store.objects[preTxt.Key] = splitUTF8Txt
+	store.types[preTxt.Key] = "text/plain"
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      preTxt.Key,
+		Filename: "notes.txt",
+	}); err != nil {
+		t.Fatalf("expected ConfirmUpload of >512B UTF-8 text with split rune at byte 512 to succeed, got %v", err)
+	}
+
+	// 9. Nemesis Round 7: SignURL must reject query-injected / empty-leaf keys for both user and admin
+	signer := &stubSigner{}
+	signFactory := application.NewFactory(store, repo, signer, nil, nil, "https://cdn.mikeodnis.dev", 1024)
+	admin := media.Actor{UserID: uuid.NewString(), Role: "admin"}
+	for _, actor := range []media.Actor{u1, admin} {
+		for _, badKey := range []string{
+			"private/" + actor.UserID + "/",
+			"private/" + actor.UserID + "/doc.pdf?exp=9999999999",
+			"private/" + actor.UserID + "/doc.pdf#frag",
+		} {
+			if _, err := signFactory.SignURL().Execute(context.Background(), media.SignURLInput{
+				Actor: actor,
+				Key:   badKey,
+			}); !apperr.IsType(err, apperr.TypeValidation) {
+				t.Fatalf("expected SignURL rejection for actor=%s badKey=%q, got %v", actor.Role, badKey, err)
+			}
+		}
+	}
 }
+
+type stubSigner struct{}
+
+func (*stubSigner) SignPath(string, time.Time) string { return "sig" }
+func (*stubSigner) BuildPrivateURL(base, key string, ttl time.Duration) (string, time.Time) {
+	return base + "/" + key + "?exp=1&sig=sig", time.Now().Add(ttl)
+}
+func (*stubSigner) Verify(string, string, string, time.Time) bool { return true }
 
 type failingSaveRepo struct {
 	port.AssetRepository

@@ -127,22 +127,7 @@ func DetectFileSignature(head []byte) (FileType, bool) {
 	}
 
 	// Text/SVG classification: require valid UTF-8 with no non-whitespace control bytes.
-	wasTruncated := len(head) > 512
-	sample := head
-	if wasTruncated {
-		sample = sample[:512]
-	}
-	sample = bytes.TrimPrefix(sample, []byte{0xEF, 0xBB, 0xBF}) // Strip optional UTF-8 BOM
-	// Avoid false UTF-8 failure ONLY when a multi-byte rune was split at the 512-byte sniff cap.
-	if wasTruncated {
-		minLen := len(sample) - 3
-		if minLen < 0 {
-			minLen = 0
-		}
-		for len(sample) > minLen && !utf8.Valid(sample) {
-			sample = sample[:len(sample)-1]
-		}
-	}
+	sample := trimTruncatedUTF8Head(head)
 	if len(sample) == 0 || !utf8.Valid(sample) {
 		return "", false
 	}
@@ -199,7 +184,13 @@ func ValidateUploadContent(filename Filename, declaredContentType string, head [
 	}
 
 	if detected == FileTypeSVG {
-		if err := ValidateSVGContent(head); err != nil {
+		svgSample := head
+		if len(head) == 513 {
+			// When called with a 513-byte sniff window (UploadUseCase), avoid failing on a rune
+			// split across byte 512; callers still run full-body ValidateSVGContent afterward.
+			svgSample = trimTruncatedUTF8Head(head)
+		}
+		if err := ValidateSVGContent(svgSample); err != nil {
 			return "", err
 		}
 	}
@@ -251,6 +242,26 @@ func ValidatePresignContentType(filename Filename, declaredContentType string) (
 		return declared, nil
 	}
 	return "", apperr.Validation(fmt.Sprintf("file extension %q is not allowed", filename.Ext))
+}
+
+func trimTruncatedUTF8Head(head []byte) []byte {
+	wasTruncated := len(head) > 512
+	sample := head
+	if wasTruncated {
+		sample = sample[:512]
+	}
+	sample = bytes.TrimPrefix(sample, []byte{0xEF, 0xBB, 0xBF}) // Strip optional UTF-8 BOM
+	// Avoid false UTF-8 failure ONLY when a multi-byte rune was split at the 512-byte sniff cap.
+	if wasTruncated {
+		minLen := len(sample) - 3
+		if minLen < 0 {
+			minLen = 0
+		}
+		for len(sample) > minLen && !utf8.Valid(sample) {
+			sample = sample[:len(sample)-1]
+		}
+	}
+	return sample
 }
 
 func normalizeMIME(raw string) string {

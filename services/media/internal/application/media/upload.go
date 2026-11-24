@@ -70,7 +70,8 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 		effectiveMax = model.MaxSVGBytes
 	}
 
-	sniffBuf := make([]byte, 512)
+	// Read 512 + 1 sentinel byte so DetectFileSignature knows whether a trailing UTF-8 rune was split by truncation.
+	sniffBuf := make([]byte, 513)
 	n, readErr := io.ReadFull(in.File, sniffBuf)
 	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
 		return nil, apperr.System("failed to read uploaded file", readErr)

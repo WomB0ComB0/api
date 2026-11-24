@@ -108,6 +108,9 @@ func NewRouter(factory *application.Factory, cfg *config.Config) http.Handler {
 			// Post-auth per-user cost-tiered sliding-window limits (upload/presign/purge tighter than reads)
 			r.Use(userLimiter.Middleware(
 				func(r *http.Request) *middleware.RateLimitPolicy {
+					if r.Method == http.MethodDelete {
+						return &userWritePolicy
+					}
 					if r.Method == http.MethodPost {
 						switch r.URL.Path {
 						case "/v1/media/upload", "/v1/media/presign", "/v1/media/assets/confirm", "/v1/media/purge":

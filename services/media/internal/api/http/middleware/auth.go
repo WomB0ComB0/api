@@ -109,7 +109,9 @@ func WithUser(ctx context.Context, userID, role string) context.Context {
 }
 
 func writeAuthError(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

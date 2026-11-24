@@ -74,8 +74,16 @@ func (uc *SignURLUseCase) Execute(ctx context.Context, in SignURLInput) (*SignUR
 			if _, err := model.ValidateOwnedKey(key, in.Actor.UserID); err != nil {
 				return nil, err
 			}
-		} else if strings.Contains(key, "..") || strings.Contains(key, `\`) {
-			return nil, apperr.Validation("invalid object key")
+		} else {
+			if err := model.ValidateObjectKeySafety(key); err != nil {
+				return nil, err
+			}
+			// Require at least private/<owner>/<leaf>
+			rest := strings.TrimPrefix(key, "private/")
+			parts := strings.SplitN(rest, "/", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return nil, apperr.Validation("invalid object key")
+			}
 		}
 	default:
 		return nil, apperr.Validation("either asset_id or key is required")

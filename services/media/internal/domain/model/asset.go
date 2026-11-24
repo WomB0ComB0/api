@@ -113,12 +113,27 @@ func BuildStagingKey(vis Visibility, userID, leaf string) string {
 	return "staging/" + BuildObjectKey(vis, userID, leaf)
 }
 
+// ValidateObjectKeySafety blocks path traversal, query/fragment injection, percent-encoding,
+// double slashes, and ASCII control / Unicode bidi runes in R2 keys.
+func ValidateObjectKeySafety(clean string) error {
+	if clean == "" ||
+		len(clean) > 512 ||
+		containsUnsafeFilenameRune(clean) ||
+		strings.Contains(clean, "..") ||
+		strings.Contains(clean, "//") ||
+		strings.ContainsAny(clean, `\?#%`) ||
+		strings.HasSuffix(clean, "/") {
+		return apperr.Validation("invalid object key")
+	}
+	return nil
+}
+
 // ValidateStagingKey enforces that a presigned upload key belongs to userID under staging/*
-// and returns the bound visibility plus the final live R2 destination key.
+// with a single flat leaf filename and returns the bound visibility plus the final live R2 key.
 func ValidateStagingKey(key, userID string) (Visibility, string, error) {
 	clean := strings.TrimLeft(strings.TrimSpace(key), "/")
-	if clean == "" || strings.Contains(clean, "..") || strings.Contains(clean, `\`) {
-		return "", "", apperr.Validation("invalid object key")
+	if err := ValidateObjectKeySafety(clean); err != nil {
+		return "", "", err
 	}
 	if !strings.HasPrefix(clean, "staging/") {
 		return "", "", apperr.Validation("key must be a presigned staging key")
@@ -128,19 +143,36 @@ func ValidateStagingKey(key, userID string) (Visibility, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	prefix := fmt.Sprintf("assets/%s/", userID)
+	if vis == VisibilityPrivate {
+		prefix = fmt.Sprintf("private/%s/", userID)
+	}
+	leaf := strings.TrimPrefix(finalKey, prefix)
+	if leaf == "" || strings.Contains(leaf, "/") || strings.HasPrefix(leaf, ".") {
+		return "", "", apperr.Validation("invalid object key")
+	}
 	return vis, finalKey, nil
 }
 
-// ValidateOwnedKey enforces that an object key contains no traversal and belongs to userID.
+// ValidateOwnedKey enforces that an object key is structurally safe, has a non-empty leaf,
+// and belongs to userID.
 func ValidateOwnedKey(key, userID string) (Visibility, error) {
 	clean := strings.TrimLeft(strings.TrimSpace(key), "/")
-	if clean == "" || strings.Contains(clean, "..") || strings.Contains(clean, `\`) {
-		return "", apperr.Validation("invalid object key")
+	if err := ValidateObjectKeySafety(clean); err != nil {
+		return "", err
 	}
-	if strings.HasPrefix(clean, fmt.Sprintf("assets/%s/", userID)) {
+	pubPrefix := fmt.Sprintf("assets/%s/", userID)
+	if strings.HasPrefix(clean, pubPrefix) {
+		if strings.TrimPrefix(clean, pubPrefix) == "" {
+			return "", apperr.Validation("invalid object key")
+		}
 		return VisibilityPublic, nil
 	}
-	if strings.HasPrefix(clean, fmt.Sprintf("private/%s/", userID)) {
+	privPrefix := fmt.Sprintf("private/%s/", userID)
+	if strings.HasPrefix(clean, privPrefix) {
+		if strings.TrimPrefix(clean, privPrefix) == "" {
+			return "", apperr.Validation("invalid object key")
+		}
 		return VisibilityPrivate, nil
 	}
 	return "", apperr.Forbidden("key does not belong to authenticated user")
