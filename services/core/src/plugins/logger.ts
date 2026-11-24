@@ -4,6 +4,7 @@ import { encodeLogValue } from '@resq-systems/security/validators';
 import { isNonEmptyString } from '@resq-systems/types';
 import { Elysia } from 'elysia';
 import { randomUUID } from 'node:crypto';
+import { extractTrustedClientIp } from './rateLimit.js';
 
 export interface RequestLoggerOptions {
   enabled: boolean;
@@ -36,11 +37,7 @@ export function createRequestLoggerPlugin(options: RequestLoggerOptions) {
       const incomingId = request.headers.get('x-request-id');
       const requestId = isNonEmptyString(incomingId) ? encodeLogValue(incomingId).slice(0, 128) : randomUUID();
       set.headers['x-request-id'] = requestId;
-      const forwarded = request.headers.get('x-forwarded-for');
-      const rawIp = isNonEmptyString(forwarded)
-        ? forwarded.split(',')[0]!.trim()
-        : request.headers.get('x-real-ip') || 'local';
-      const clientIp = encodeLogValue(rawIp).slice(0, 64);
+      const clientIp = encodeLogValue(extractTrustedClientIp(request)).slice(0, 64);
       return {
         requestId,
         clientIp,

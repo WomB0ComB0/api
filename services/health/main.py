@@ -34,6 +34,8 @@ _SHARED_POOL: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
     max_workers=10, thread_name_prefix="health-probe"
 )
 
+_MAX_PROBE_BODY_BYTES: Final[int] = 65_536
+
 # Pre-encoded static wire frames for zero-allocation error / HEAD responses
 _NOT_FOUND_BODY: Final[bytes] = b'{"error":"Not found"}'
 _NOT_FOUND_HEAD: Final[bytes] = (
@@ -41,9 +43,19 @@ _NOT_FOUND_HEAD: Final[bytes] = (
     b"Content-Type: application/json\r\n"
     b"Content-Length: 21\r\n"
     b"Cache-Control: no-store\r\n"
+    b"X-Content-Type-Options: nosniff\r\n"
     b"Connection: keep-alive\r\n\r\n"
 )
+_NOT_FOUND_HEAD_CLOSE: Final[bytes] = (
+    b"HTTP/1.1 404 Not Found\r\n"
+    b"Content-Type: application/json\r\n"
+    b"Content-Length: 21\r\n"
+    b"Cache-Control: no-store\r\n"
+    b"X-Content-Type-Options: nosniff\r\n"
+    b"Connection: close\r\n\r\n"
+)
 _NOT_FOUND_GET: Final[bytes] = _NOT_FOUND_HEAD + _NOT_FOUND_BODY
+_NOT_FOUND_GET_CLOSE: Final[bytes] = _NOT_FOUND_HEAD_CLOSE + _NOT_FOUND_BODY
 
 
 class ServiceHealthResult(TypedDict):
@@ -60,17 +72,30 @@ class AggregatedHealthPayload(TypedDict):
     services: list[ServiceHealthResult]
 
 
-def _build_wire_frames(status: int, body: bytes) -> tuple[bytes, bytes]:
+def _build_wire_frames(status: int, body: bytes, keep_alive: bool = True) -> tuple[bytes, bytes]:
     """Build contiguous HTTP/1.1 (head_frame, get_frame) buffers for single-syscall writes."""
     reason = "OK" if status == 200 else ("Service Unavailable" if status == 503 else "Error")
+    conn = "keep-alive" if keep_alive else "close"
     head = (
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: application/json\r\n"
         f"Content-Length: {len(body)}\r\n"
         f"Cache-Control: no-store\r\n"
-        f"Connection: keep-alive\r\n\r\n"
+        f"X-Content-Type-Options: nosniff\r\n"
+        f"Connection: {conn}\r\n\r\n"
     ).encode("ascii")
     return head, head + body
+
+
+def _sanitize_probe_error(exc: Exception) -> str:
+    """Return a non-sensitive error category for public /health responses (log details server-side)."""
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "probe timed out"
+    if isinstance(exc, ConnectionRefusedError):
+        return "connection refused"
+    if isinstance(exc, ssl.SSLError):
+        return "tls handshake failed"
+    return "upstream unreachable"
 
 
 class _UpstreamTarget:
@@ -126,17 +151,19 @@ class _UpstreamTarget:
         start = time.monotonic()
         with self._lock:
             for attempt in range(2):
+                reused_conn = self._conn is not None
                 try:
-                    if self._conn is None:
+                    if not reused_conn:
                         self._conn = self._connect(timeout)
                     else:
+                        assert self._conn is not None
                         self._conn.timeout = timeout
                     self._conn.request("GET", self.path, headers=_PROBE_HEADERS)
                     resp = self._conn.getresponse()
                     status_code = resp.status
-                    # Drain body so the keep-alive TCP socket can be reused immediately
-                    resp.read()
-                    if resp.will_close:
+                    # Bounded drain so a misbehaving upstream cannot OOM the health aggregator
+                    drained = resp.read(_MAX_PROBE_BODY_BYTES + 1)
+                    if resp.will_close or len(drained) > _MAX_PROBE_BODY_BYTES:
                         self._close_conn()
                     latency_ms = round((time.monotonic() - start) * 1000.0, 1)
                     if status_code == 200:
@@ -154,17 +181,18 @@ class _UpstreamTarget:
                         "error": f"HTTP {status_code}",
                     }
                 except (http.client.HTTPException, OSError) as exc:
-                    # Stale keep-alive socket on first attempt -> reconnect once transparently
+                    # Only retry once when an already-open keep-alive socket went stale
                     self._close_conn()
-                    if attempt == 0:
+                    if attempt == 0 and reused_conn:
                         continue
+                    logger.warning("Health probe failed for %s: %s", self.name, exc)
                     latency_ms = round((time.monotonic() - start) * 1000.0, 1)
                     return {
                         "service": self.name,
                         "status": "unhealthy",
                         "url": self.url,
                         "latency_ms": latency_ms,
-                        "error": str(exc),
+                        "error": _sanitize_probe_error(exc),
                     }
         latency_ms = round((time.monotonic() - start) * 1000.0, 1)
         return {
@@ -183,23 +211,36 @@ class _UpstreamTarget:
 class _CachedSnapshot:
     """Immutable pre-serialized wire snapshot; atomic reference swap eliminates reader locks."""
 
-    __slots__ = ("status", "payload", "head_frame", "get_frame", "expires_at")
+    __slots__ = (
+        "status",
+        "payload",
+        "head_frame",
+        "get_frame",
+        "head_frame_close",
+        "get_frame_close",
+        "expires_at",
+    )
 
     status: int
     payload: AggregatedHealthPayload
     head_frame: bytes
     get_frame: bytes
+    head_frame_close: bytes
+    get_frame_close: bytes
     expires_at: float
 
     def __init__(
         self, status: int, payload: AggregatedHealthPayload, expires_at: float
     ) -> None:
         body = json.dumps(payload, separators=_JSON_SEPARATORS).encode("utf-8")
-        head_frame, get_frame = _build_wire_frames(status, body)
+        head_frame, get_frame = _build_wire_frames(status, body, keep_alive=True)
+        head_frame_close, get_frame_close = _build_wire_frames(status, body, keep_alive=False)
         self.status = status
         self.payload = payload
         self.head_frame = head_frame
         self.get_frame = get_frame
+        self.head_frame_close = head_frame_close
+        self.get_frame_close = get_frame_close
         self.expires_at = expires_at
 
 
@@ -317,6 +358,7 @@ def make_handler(
     class HealthHandler(_HealthHandlerBase):
         protocol_version = "HTTP/1.1"
         disable_nagle_algorithm = True  # Sets TCP_NODELAY on every accepted client socket
+        timeout = 10.0  # Bound idle keep-alive sockets against Slowloris thread exhaustion
         cache: ClassVar[_CoalescedHealthCache] = health_cache
 
         def do_HEAD(self) -> None:  # noqa: N802
@@ -326,10 +368,14 @@ def make_handler(
             self._handle(head_only=False)
 
         def _handle(self, head_only: bool) -> None:
-            path = self.path
+            path = self.path.split("?", 1)[0]
+            keep_alive = not self.close_connection
             if path == "/health":
                 snap = self.cache.get_snapshot()
-                self.wfile.write(snap.head_frame if head_only else snap.get_frame)
+                if keep_alive:
+                    self.wfile.write(snap.head_frame if head_only else snap.get_frame)
+                else:
+                    self.wfile.write(snap.head_frame_close if head_only else snap.get_frame_close)
                 if access_log:
                     self.log_request(snap.status)
                 return
@@ -343,13 +389,16 @@ def make_handler(
                     },
                     separators=_JSON_SEPARATORS,
                 ).encode("utf-8")
-                head_frame, get_frame = _build_wire_frames(200, body)
+                head_frame, get_frame = _build_wire_frames(200, body, keep_alive=keep_alive)
                 self.wfile.write(head_frame if head_only else get_frame)
                 if access_log:
                     self.log_request(200)
                 return
 
-            self.wfile.write(_NOT_FOUND_HEAD if head_only else _NOT_FOUND_GET)
+            if keep_alive:
+                self.wfile.write(_NOT_FOUND_HEAD if head_only else _NOT_FOUND_GET)
+            else:
+                self.wfile.write(_NOT_FOUND_HEAD_CLOSE if head_only else _NOT_FOUND_GET_CLOSE)
             if access_log:
                 self.log_request(404)
 

@@ -51,7 +51,7 @@ export function createAuthMacro(db: Database, config: AppConfig) {
         let rawApiKey: string | undefined;
         if (typeof apiKeyHeader === 'string' && apiKeyHeader.trim() !== '') {
           rawApiKey = apiKeyHeader.trim();
-        } else if (typeof bearerToken === 'string' && bearerToken.startsWith('mk_')) {
+        } else if (typeof bearerToken === 'string' && bearerToken.startsWith('mk_live_')) {
           rawApiKey = bearerToken.trim();
         }
 
@@ -90,11 +90,14 @@ export function createAuthMacro(db: Database, config: AppConfig) {
           return status(401, { error: 'Unauthorized' });
         }
 
-        const payload = (await jwtHelper.verify(bearerToken)) as Partial<AccessTokenPayload> | false;
+        const payload = (await jwtHelper.verify(bearerToken)) as
+          | (Partial<AccessTokenPayload> & { exp?: unknown })
+          | false;
         if (
           !payload ||
           typeof payload.sub !== 'string' ||
           typeof payload.email !== 'string' ||
+          typeof payload.exp !== 'number' ||
           (payload.role !== 'user' && payload.role !== 'admin')
         ) {
           return status(401, { error: 'Invalid or expired token' });

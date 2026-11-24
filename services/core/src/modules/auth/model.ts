@@ -81,7 +81,7 @@ export const AuthModel = {
   meResponse: UserProfileSchema,
   createApiKeyBody: t.Object({
     name: t.String({ minLength: 1, maxLength: 100 }),
-    scopes: t.Optional(t.Array(ApiKeyScopeSchema, { minItems: 1 })),
+    scopes: t.Optional(t.Array(ApiKeyScopeSchema, { minItems: 1, maxItems: 4, uniqueItems: true })),
     expires_in_days: t.Optional(t.Integer({ minimum: 1, maximum: 365 })),
   }),
   createApiKeyResponse: t.Composite([

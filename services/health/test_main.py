@@ -109,6 +109,49 @@ class HealthAggregatorTests(unittest.TestCase):
             upstream.shutdown()
             upstream.server_close()
 
+    def test_query_string_nosniff_bounded_drain_and_sanitized_errors(self) -> None:
+        class OversizedHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                body = b"x" * 100_000
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        upstream = HTTPServer(("127.0.0.1", 0), OversizedHandler)
+        up_port = upstream.server_address[1]
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        agg = create_server("127.0.0.1", 0, {"big": f"http://127.0.0.1:{up_port}/ok"}, cache_ttl=0.0)
+        agg_port = agg.server_address[1]
+        threading.Thread(target=agg.serve_forever, daemon=True).start()
+        try:
+            # Query string on /health should not 404, must include nosniff, and handle oversized upstream safely
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{agg_port}/health?cb=1",
+                headers={"Connection": "close"},
+            )
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers.get("X-Content-Type-Options"), "nosniff")
+                self.assertEqual(resp.headers.get("Connection"), "close")
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["status"], "healthy")
+
+            # Unreachable port returns sanitized error category (never raw Errno / internal details)
+            code, err_body = check_all_services({"down": "http://127.0.0.1:1/health"}, timeout=0.5)
+            self.assertEqual(code, 503)
+            err_msg = err_body["services"][0].get("error", "")
+            self.assertIn(err_msg, ("connection refused", "upstream unreachable", "probe timed out"))
+            self.assertNotIn("Errno", err_msg)
+        finally:
+            agg.shutdown()
+            agg.server_close()
+            upstream.shutdown()
+            upstream.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

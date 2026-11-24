@@ -105,6 +105,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
     .get(
       '/me',
       async ({ authUser }) => {
+        if (authUser.authType === 'api_key' && !authUser.scopes?.includes('read')) {
+          return status(403, { error: 'API key lacks required "read" scope' });
+        }
         const profile = await service.getProfile(authUser.id);
         if (!profile) {
           return status(404, { error: 'User not found' });
@@ -116,6 +119,7 @@ export function createAuthModule(db: Database, config: AppConfig) {
         response: {
           200: AuthModel.meResponse,
           401: AuthModel.error,
+          403: AuthModel.error,
           404: AuthModel.error,
         },
         detail: {

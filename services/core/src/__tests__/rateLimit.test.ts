@@ -5,6 +5,7 @@ import {
   classifyCorePolicy,
   createRateLimitPlugin,
   type DistributedStore,
+  extractTrustedClientIp,
   RateLimitMetricsTracker,
   resolveRateLimitIdentity,
 } from '../plugins/rateLimit.js';
@@ -76,7 +77,7 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     const req = () =>
       new Request('http://localhost/v1/core/auth/login', {
         method: 'POST',
-        headers: { 'cf-connecting-ip': '198.51.100.5' },
+        headers: { 'x-forwarded-for': '198.51.100.5, 100.64.0.10' },
       });
 
     const r1 = await app.handle(req());
@@ -96,12 +97,14 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     const body = (await r3.json()) as { error: string; policy: string };
     expect(body.policy).toBe('auth');
 
-    // Spoofed random X-API-Key header MUST NOT bypass auth brute-force rate limit!
+    // Spoofed CF-Connecting-IP, X-Real-IP, leftmost XFF, and random X-API-Key MUST NOT bypass auth limit!
     const spoofedBypass = await app.handle(
       new Request('http://localhost/v1/core/auth/login', {
         method: 'POST',
         headers: {
-          'cf-connecting-ip': '198.51.100.5',
+          'cf-connecting-ip': '203.0.113.250',
+          'x-real-ip': '203.0.113.251',
+          'x-forwarded-for': '203.0.113.252, 198.51.100.5, 100.64.0.10',
           'x-api-key': 'mk_live_random_spoofed_bypass_attempt_999',
         },
       })
@@ -111,7 +114,7 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     // Health endpoint stays exempt even when client is rate-limited
     const health = await app.handle(
       new Request('http://localhost/v1/core/health', {
-        headers: { 'cf-connecting-ip': '198.51.100.5' },
+        headers: { 'x-forwarded-for': '198.51.100.5, 100.64.0.10' },
       })
     );
     expect(health.status).toBe(200);
@@ -173,5 +176,69 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     expect(snap.circuit_open_trips).toBe(1);
     expect(snap.local_fallback_hits).toBe(3);
     expect(snap.limited_429).toBe(1);
+  });
+
+  test('extracts rightmost non-private XFF hop and blocks fake X-API-Key rotation bypass on non-auth routes', async () => {
+    // Spoofed CF-Connecting-IP, X-Real-IP, and leftmost XFF hop must all be ignored behind private mesh proxies
+    const spoofReq = new Request('http://localhost/v1/core/users', {
+      headers: {
+        'cf-connecting-ip': '1.1.1.1',
+        'x-real-ip': '2.2.2.2',
+        'x-forwarded-for': '3.3.3.3, 198.51.100.42, 100.64.1.2, ::ffff:10.0.0.5, fd12:3456::1',
+      },
+    });
+    expect(extractTrustedClientIp(spoofReq)).toBe('198.51.100.42');
+
+    // Authorization: Bearer mk_live_* maps to the exact same apikey:<hash> bucket as X-API-Key
+    const rawKey = 'mk_live_consistent_bucket_key_12345678';
+    const xApiKeyId = resolveRateLimitIdentity(
+      new Request('http://localhost/v1/core/users', { headers: { 'x-api-key': rawKey } }),
+      secret,
+      Date.now(),
+      'read'
+    );
+    const bearerApiKeyId = resolveRateLimitIdentity(
+      new Request('http://localhost/v1/core/users', { headers: { authorization: `Bearer ${rawKey}` } }),
+      secret,
+      Date.now(),
+      'read'
+    );
+    expect(bearerApiKeyId).toBe(xApiKeyId);
+
+    // Rotating random fake mk_live_* API keys from one IP must NOT bypass read/write rate limits
+    let clock = 180_000;
+    const app = new Elysia()
+      .use(
+        createRateLimitPlugin({
+          max: 2,
+          windowMs: 60_000,
+          jwtSecret: secret,
+          now: () => clock,
+        })
+      )
+      .get('/v1/core/auth/me', () => ({ ok: true }));
+
+    for (let i = 0; i < 2; i += 1) {
+      const res = await app.handle(
+        new Request('http://localhost/v1/core/auth/me', {
+          headers: {
+            'x-forwarded-for': '198.51.100.77, 10.0.0.1',
+            'x-api-key': `mk_live_fake_rotating_key_${String(i).padStart(16, '0')}`,
+          },
+        })
+      );
+      expect(res.status).toBe(200);
+    }
+
+    // 3rd request with a brand-new random mk_live_* key from the same IP is still blocked by outer IP bucket!
+    const blocked = await app.handle(
+      new Request('http://localhost/v1/core/auth/me', {
+        headers: {
+          'x-forwarded-for': '198.51.100.77, 10.0.0.1',
+          'x-api-key': 'mk_live_fake_rotating_key_brand_new_9999',
+        },
+      })
+    );
+    expect(blocked.status).toBe(429);
   });
 });

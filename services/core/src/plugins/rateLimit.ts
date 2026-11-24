@@ -252,6 +252,7 @@ export interface RateLimitOptions {
   maxBuckets?: number;
   enabled?: boolean;
   jwtSecret?: string | undefined;
+  trustCloudflareHeaders?: boolean;
   upstashRedisUrl?: string | undefined;
   upstashRedisToken?: string | undefined;
   distributedStore?: DistributedStore;
@@ -355,25 +356,88 @@ function extractJwtSubVerified(token: string, secret: string, nowSec: number): s
   }
 }
 
-export function extractTrustedClientIp(request: Request): string {
-  const cfIp = request.headers.get('cf-connecting-ip');
-  if (isNonEmptyString(cfIp)) return cfIp.trim().slice(0, 64);
+function isPrivateOrLoopbackIPv4(ip: string): boolean {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const n = Number(part);
+    if (n < 0 || n > 255) return false;
+    octets.push(n);
+  }
+  const [a, b] = octets as [number, number, number, number];
+  return (
+    a === 0 || // 0.0.0.0/8
+    a === 10 || // 10.0.0.0/8 (RFC 1918)
+    a === 127 || // 127.0.0.0/8 (loopback)
+    (a === 100 && b >= 64 && b <= 127) || // 100.64.0.0/10 (RFC 6598 CGNAT / Railway mesh)
+    (a === 169 && b === 254) || // 169.254.0.0/16 (link-local)
+    (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 (RFC 1918)
+    (a === 192 && b === 168) // 192.168.0.0/16 (RFC 1918)
+  );
+}
 
-  const realIp = request.headers.get('x-real-ip');
-  if (isNonEmptyString(realIp)) return realIp.trim().slice(0, 64);
+export function isPrivateOrLoopbackIp(raw: string): boolean {
+  const ip = raw.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!ip) return true;
+  if (ip.startsWith('::ffff:')) {
+    return isPrivateOrLoopbackIPv4(ip.slice('::ffff:'.length));
+  }
+  if (ip.includes('.')) {
+    return isPrivateOrLoopbackIPv4(ip);
+  }
+  if (ip === '::1' || ip === '::') return true;
+  // IPv6 ULA (fc00::/7 -> fc.. or fd..) and link-local (fe80::/10 -> fe8..feb)
+  if (/^f[cd][0-9a-f]{2}:/.test(ip) || /^fe[89ab][0-9a-f]:/.test(ip)) return true;
+  return false;
+}
+
+/**
+ * Extract the non-spoofable client IP behind trusted private-mesh reverse proxies (Railway Edge + Caddy):
+ * - Walks `X-Forwarded-For` from the RIGHT, skipping private/loopback/CGNAT proxy hops (identical
+ *   fail-closed semantics to media-service's `chimiddleware.ClientIPFromXFF`).
+ * - Never trusts `CF-Connecting-IP` unless `trustCloudflareHeaders` is explicitly enabled (api.mikeodnis.dev
+ *   runs directly on Railway behind Caddy, not Cloudflare).
+ * - Only falls back to `X-Real-IP` when `X-Forwarded-For` is absent.
+ */
+export function extractTrustedClientIp(
+  request: Request,
+  options?: { trustCloudflareHeaders?: boolean }
+): string {
+  if (options?.trustCloudflareHeaders) {
+    const cfIp = request.headers.get('cf-connecting-ip');
+    if (isNonEmptyString(cfIp)) return cfIp.trim().slice(0, 64);
+  }
 
   const forwarded = request.headers.get('x-forwarded-for');
   if (isNonEmptyString(forwarded)) {
-    const first = forwarded.split(',')[0]?.trim();
-    if (first) return first.slice(0, 64);
+    const hops = forwarded
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (let i = hops.length - 1; i >= 0; i -= 1) {
+      const hop = hops[i]!;
+      if (!isPrivateOrLoopbackIp(hop)) {
+        return hop.slice(0, 64);
+      }
+    }
+    const rightmost = hops[hops.length - 1];
+    if (rightmost) return rightmost.slice(0, 64);
   }
+
+  const realIp = request.headers.get('x-real-ip');
+  if (isNonEmptyString(realIp)) return realIp.trim().slice(0, 64);
 
   return 'local';
 }
 
 /**
  * Resolve rate-limit identity key without hitting the DB:
- * - `X-API-Key` -> `apikey:<sha256-16>` (never stores the raw key)
+ * - Public `auth` policy -> ALWAYS `ip:<trusted-client-ip>` (prevents fake-key brute-force bypass)
+ * - `auth-keys` policy (JWT-only) -> verified HS256 JWT `user:<sub-id>` or `ip:<trusted-client-ip>`
+ * - Other routes: `X-API-Key` or `Authorization: Bearer mk_live_*` -> `apikey:<sha256-16>` (paired
+ *   with an outer IP ceiling in `createRateLimitPlugin` so random fake keys cannot bypass limits or flood DB)
  * - Verified HS256 JWT `Authorization: Bearer ...` -> `user:<sub-id>`
  * - Anonymous -> `ip:<trusted-client-ip>`
  */
@@ -381,33 +445,44 @@ export function resolveRateLimitIdentity(
   request: Request,
   jwtSecret?: string,
   nowMs = Date.now(),
-  policyName?: CoreRateLimitPolicyName
+  policyName?: CoreRateLimitPolicyName,
+  options?: { trustCloudflareHeaders?: boolean }
 ): string {
+  const ipKey = `ip:${extractTrustedClientIp(request, options)}`;
+
   // Public auth endpoints (/login, /register, /refresh, /logout) MUST always be keyed by IP so an
-  // unauthenticated attacker cannot bypass brute-force rate limits by sending random X-API-Key headers.
+  // unauthenticated attacker cannot bypass brute-force rate limits by sending random credentials.
   if (policyName === 'auth') {
-    return `ip:${extractTrustedClientIp(request)}`;
+    return ipKey;
   }
 
-  const apiKey = request.headers.get('x-api-key');
-  if (isNonEmptyString(apiKey)) {
-    const trimmed = apiKey.trim();
-    if (trimmed.startsWith('mk_live_') && trimmed.length >= 24) {
-      const hash = createHash('sha256').update(trimmed).digest('hex').slice(0, 16);
+  const auth = request.headers.get('authorization');
+  const bearerToken =
+    isNonEmptyString(auth) && auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : undefined;
+
+  // API key management routes require a Bearer JWT — never allow unverified API keys to mint buckets.
+  if (policyName !== 'auth-keys') {
+    const apiKeyHeader = request.headers.get('x-api-key');
+    const rawApiKey = isNonEmptyString(apiKeyHeader)
+      ? apiKeyHeader.trim()
+      : bearerToken && bearerToken.startsWith('mk_live_')
+        ? bearerToken
+        : undefined;
+
+    if (rawApiKey && rawApiKey.startsWith('mk_live_') && rawApiKey.length >= 24) {
+      const hash = createHash('sha256').update(rawApiKey).digest('hex').slice(0, 16);
       return `apikey:${hash}`;
     }
   }
 
-  const auth = request.headers.get('authorization');
-  if (jwtSecret && isNonEmptyString(auth) && auth.startsWith('Bearer ')) {
-    const token = auth.slice('Bearer '.length).trim();
-    const sub = extractJwtSubVerified(token, jwtSecret, Math.floor(nowMs / 1000));
+  if (jwtSecret && bearerToken) {
+    const sub = extractJwtSubVerified(bearerToken, jwtSecret, Math.floor(nowMs / 1000));
     if (sub) {
       return `user:${sub}`;
     }
   }
 
-  return `ip:${extractTrustedClientIp(request)}`;
+  return ipKey;
 }
 
 export function createRateLimitPlugin(options: RateLimitOptions) {
@@ -423,23 +498,25 @@ export function createRateLimitPlugin(options: RateLimitOptions) {
   const circuitFailureThreshold = options.circuitFailureThreshold ?? 2;
   const nowFn = options.now ?? (() => Date.now());
   const metrics = options.metrics ?? new RateLimitMetricsTracker(distributedStore ? 'redis' : 'memory');
+  const ipOptions = { trustCloudflareHeaders: options.trustCloudflareHeaders ?? false };
 
   let consecutiveFailures = 0;
   let circuitOpenUntil = 0;
 
-  return new Elysia({ name: 'rate-limit' }).onBeforeHandle({ as: 'global' }, async ({ request, set }) => {
-    if (options.enabled === false) return undefined;
-
-    const pathname = new URL(request.url).pathname;
-    const policy = classifyCorePolicy(request.method, pathname, options);
-    if (!policy) return undefined;
-
-    const nowMs = nowFn();
-    const perfStart = performance.now();
-    const identity = resolveRateLimitIdentity(request, options.jwtSecret, nowMs, policy.name);
-    const key = `${policy.name}:${identity}`;
-    const windowSeconds = Math.max(1, Math.round(policy.windowMs / 1000));
-
+  async function consumeBucket(
+    key: string,
+    policy: CoreRateLimitPolicy,
+    nowMs: number
+  ): Promise<{
+    allowed: boolean;
+    limit: number;
+    remaining: number;
+    resetAtMs: number;
+    usedFallback: boolean;
+    storeError: boolean;
+    storeTimeout: boolean;
+    circuitOpened: boolean;
+  }> {
     let allowed = true;
     let limit = policy.limit;
     let remaining = policy.limit;
@@ -485,6 +562,47 @@ export function createRateLimitPlugin(options: RateLimitOptions) {
       resetAtMs = local.resetAtMs;
     }
 
+    return { allowed, limit, remaining, resetAtMs, usedFallback, storeError, storeTimeout, circuitOpened };
+  }
+
+  return new Elysia({ name: 'rate-limit' }).onBeforeHandle({ as: 'global' }, async ({ request, set }) => {
+    if (options.enabled === false) return undefined;
+
+    const pathname = new URL(request.url).pathname;
+    const policy = classifyCorePolicy(request.method, pathname, options);
+    if (!policy) return undefined;
+
+    const nowMs = nowFn();
+    const perfStart = performance.now();
+    const identity = resolveRateLimitIdentity(request, options.jwtSecret, nowMs, policy.name, ipOptions);
+    const windowSeconds = Math.max(1, Math.round(policy.windowMs / 1000));
+
+    let outcome: Awaited<ReturnType<typeof consumeBucket>>;
+
+    if (identity.startsWith('apikey:')) {
+      // Unverified X-API-Key / Bearer mk_live_* headers cannot be validated before hitting Postgres.
+      // Enforce the outer IP bucket FIRST so attackers rotating random fake keys cannot bypass rate
+      // limits, flood UPDATE core.api_keys, or evict legitimate buckets from the LRU cache.
+      const ipKey = `${policy.name}:ip:${extractTrustedClientIp(request, ipOptions)}`;
+      const ipOutcome = await consumeBucket(ipKey, policy, nowMs);
+      if (!ipOutcome.allowed) {
+        outcome = ipOutcome;
+      } else {
+        const keyOutcome = await consumeBucket(`${policy.name}:${identity}`, policy, nowMs);
+        outcome = {
+          ...keyOutcome,
+          remaining: Math.min(ipOutcome.remaining, keyOutcome.remaining),
+          usedFallback: ipOutcome.usedFallback || keyOutcome.usedFallback,
+          storeError: ipOutcome.storeError || keyOutcome.storeError,
+          storeTimeout: ipOutcome.storeTimeout || keyOutcome.storeTimeout,
+          circuitOpened: ipOutcome.circuitOpened || keyOutcome.circuitOpened,
+        };
+      }
+    } else {
+      outcome = await consumeBucket(`${policy.name}:${identity}`, policy, nowMs);
+    }
+
+    const { allowed, limit, remaining, resetAtMs, usedFallback, storeError, storeTimeout, circuitOpened } = outcome;
     const deltaSeconds = Math.max(1, Math.ceil((resetAtMs - nowMs) / 1000));
 
     // Standard IETF draft RateLimit-* headers + legacy X-RateLimit-*

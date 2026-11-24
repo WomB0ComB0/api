@@ -31,6 +31,9 @@ export function createUsersModule(db: Database, config: AppConfig) {
     .get(
       '/:id',
       async ({ authUser, params }) => {
+        if (authUser.authType === 'api_key' && !authUser.scopes?.includes('read')) {
+          return status(403, { error: 'API key lacks required "read" scope' });
+        }
         const isAdminJwt = authUser.authType === 'jwt' && authUser.role === 'admin';
         if (!isAdminJwt && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });

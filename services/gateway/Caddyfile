@@ -1,9 +1,15 @@
 {
 	auto_https off
 	admin off
+	servers {
+		trusted_proxies static private_ranges 100.64.0.0/10 fc00::/7
+		trusted_proxies_strict
+	}
 }
 
 (proxy_defaults) {
+	header_up -CF-Connecting-IP
+	header_up -X-Real-IP
 	lb_try_duration 3s
 	lb_try_interval 250ms
 	transport http {

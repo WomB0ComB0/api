@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { treaty } from '@elysiajs/eden';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import type { Database, QueryResult } from '../db.js';
@@ -473,7 +473,7 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     let keyId = '';
     for (let i = 0; i < 10; i++) {
       const keyRes = await api.v1.core.auth['api-keys'].post(
-        { name: `script-${i}`, scopes: ['media'] },
+        { name: `script-${i}`, scopes: ['read', 'media'] },
         { headers: { authorization: `Bearer ${u1.access_token}` } }
       );
       expect(keyRes.status).toBe(201);
@@ -518,6 +518,44 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
       headers: { 'x-api-key': rawKey },
     });
     expect(keyRevokeViaKey.status).toBe(403);
+
+    // Scoped API keys without 'read' scope must be denied on /auth/me and /users/:id
+    const linksOnlyKey = await api.v1.core.auth['api-keys'].post(
+      { name: 'links-only', scopes: ['links'] },
+      { headers: { authorization: `Bearer ${u1.access_token}` } }
+    );
+    expect(linksOnlyKey.status).toBe(201);
+
+    const meWithoutReadScope = await api.v1.core.auth.me.get({
+      headers: { 'x-api-key': linksOnlyKey.data!.api_key },
+    });
+    expect(meWithoutReadScope.status).toBe(403);
+
+    const userWithoutReadScope = await api.v1.core.users({ id: u1.user.id }).get({
+      headers: { 'x-api-key': linksOnlyKey.data!.api_key },
+    });
+    expect(userWithoutReadScope.status).toBe(403);
+
+    // Duplicate scopes on API key creation must be rejected (400)
+    const dupScopeKey = await api.v1.core.auth['api-keys'].post(
+      { name: 'dup-scopes', scopes: ['read', 'read'] },
+      { headers: { authorization: `Bearer ${u1.access_token}` } }
+    );
+    expect(dupScopeKey.status).toBe(400);
+
+    // JWT signed with the real secret but missing `exp` must be rejected (401)
+    const expLessHeader = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const expLessPayload = Buffer.from(
+      JSON.stringify({ sub: u1.user.id, email: u1.user.email, role: 'user' })
+    ).toString('base64url');
+    const expLessSig = createHmac('sha256', testConfig.jwtSecret)
+      .update(`${expLessHeader}.${expLessPayload}`)
+      .digest('base64url');
+    const expLessJwt = `${expLessHeader}.${expLessPayload}.${expLessSig}`;
+    const expLessRes = await api.v1.core.auth.me.get({
+      headers: { authorization: `Bearer ${expLessJwt}` },
+    });
+    expect(expLessRes.status).toBe(401);
 
     // Scoped API keys must NEVER mutate or delete the user's account
     const patchUserViaKey = await api.v1.core.users({ id: u1.user.id }).patch(
