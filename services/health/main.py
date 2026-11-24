@@ -151,15 +151,16 @@ class _UpstreamTarget:
         start = time.monotonic()
         with self._lock:
             for attempt in range(2):
-                reused_conn = self._conn is not None
+                conn = self._conn
+                reused_conn = conn is not None
                 try:
-                    if not reused_conn:
-                        self._conn = self._connect(timeout)
+                    if conn is None:
+                        conn = self._connect(timeout)
+                        self._conn = conn
                     else:
-                        assert self._conn is not None
-                        self._conn.timeout = timeout
-                    self._conn.request("GET", self.path, headers=_PROBE_HEADERS)
-                    resp = self._conn.getresponse()
+                        conn.timeout = timeout
+                    conn.request("GET", self.path, headers=_PROBE_HEADERS)
+                    resp = conn.getresponse()
                     status_code = resp.status
                     # Bounded drain so a misbehaving upstream cannot OOM the health aggregator
                     drained = resp.read(_MAX_PROBE_BODY_BYTES + 1)
