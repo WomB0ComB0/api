@@ -15,6 +15,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
     .post(
       '/register',
       async ({ body, jwt }) => {
+        if (body.name.trim().length === 0) {
+          return status(400, { error: 'Name must not be empty or whitespace-only' });
+        }
         if (containsBidiControls(body.name) || containsBidiControls(body.email)) {
           return status(400, { error: 'Input contains disallowed bidirectional control characters' });
         }
@@ -133,6 +136,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
       async ({ authUser, body }) => {
         if (authUser.authType !== 'jwt') {
           return status(403, { error: 'API keys cannot manage API keys; authenticate with a Bearer JWT' });
+        }
+        if (body.name.trim().length === 0) {
+          return status(400, { error: 'API key name must not be empty or whitespace-only' });
         }
         if (containsBidiControls(body.name)) {
           return status(400, { error: 'API key name contains disallowed bidirectional control characters' });

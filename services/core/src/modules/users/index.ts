@@ -68,8 +68,13 @@ export function createUsersModule(db: Database, config: AppConfig) {
         if (authUser.role !== 'admin' && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });
         }
-        if (body.name && containsBidiControls(body.name)) {
-          return status(400, { error: 'Name contains disallowed bidirectional control characters' });
+        if (body.name !== undefined) {
+          if (body.name.trim().length === 0) {
+            return status(400, { error: 'Name must not be empty or whitespace-only' });
+          }
+          if (containsBidiControls(body.name)) {
+            return status(400, { error: 'Name contains disallowed bidirectional control characters' });
+          }
         }
         const updated = await service.updateName(params.id, body.name);
         if (!updated) {

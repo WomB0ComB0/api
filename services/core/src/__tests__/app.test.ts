@@ -468,6 +468,19 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(patchSelf.status).toBe(200);
     expect(patchSelf.data?.name).toBe('Updated One');
 
+    // Whitespace-only names must be rejected (400) rather than persisted as empty strings
+    const whitespacePatch = await api.v1.core.users({ id: u1.user.id }).patch(
+      { name: '   ' },
+      { headers: { authorization: `Bearer ${u1.access_token}` } }
+    );
+    expect(whitespacePatch.status).toBe(400);
+
+    const whitespaceKey = await api.v1.core.auth['api-keys'].post(
+      { name: '   ', scopes: ['read'] },
+      { headers: { authorization: `Bearer ${u1.access_token}` } }
+    );
+    expect(whitespaceKey.status).toBe(400);
+
     // Create 10 API keys to test list query count
     let rawKey = '';
     let keyId = '';
