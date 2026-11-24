@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 var _ port.ObjectStore = (*ObjectStore)(nil)
@@ -84,6 +86,28 @@ func (s *ObjectStore) PutObject(ctx context.Context, key string, body io.Reader,
 		return "", err
 	}
 	return strings.Trim(aws.ToString(out.ETag), `"`), nil
+}
+
+func (s *ObjectStore) CopyObject(ctx context.Context, srcKey, dstKey, contentType string) (string, error) {
+	segments := strings.Split(strings.TrimLeft(srcKey, "/"), "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	copySource := fmt.Sprintf("%s/%s", url.PathEscape(s.bucket), strings.Join(segments, "/"))
+	out, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(s.bucket),
+		Key:               aws.String(dstKey),
+		CopySource:        aws.String(copySource),
+		ContentType:       aws.String(contentType),
+		MetadataDirective: s3types.MetadataDirectiveReplace,
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.CopyObjectResult != nil {
+		return strings.Trim(aws.ToString(out.CopyObjectResult.ETag), `"`), nil
+	}
+	return "", nil
 }
 
 func (s *ObjectStore) HeadObject(ctx context.Context, key string) (*port.ObjectMeta, error) {

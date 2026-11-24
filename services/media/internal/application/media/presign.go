@@ -44,8 +44,9 @@ func (uc *PresignUploadUseCase) Execute(ctx context.Context, in PresignInput) (*
 		return nil, err
 	}
 
-	key := model.BuildObjectKey(visibility, in.Actor.UserID, uuid.NewString()+filename.Ext)
-	uploadURL, err := uc.store.PresignPutObject(ctx, key, contentType, DefaultPresignTTL)
+	stagingKey := model.BuildStagingKey(visibility, in.Actor.UserID, uuid.NewString()+filename.Ext)
+	finalKey := strings.TrimPrefix(stagingKey, "staging/")
+	uploadURL, err := uc.store.PresignPutObject(ctx, stagingKey, contentType, DefaultPresignTTL)
 	if err != nil {
 		return nil, apperr.External("failed to generate presigned upload URL", err)
 	}
@@ -53,8 +54,8 @@ func (uc *PresignUploadUseCase) Execute(ctx context.Context, in PresignInput) (*
 	return &PresignOutput{
 		UploadURL:  uploadURL,
 		URL:        uploadURL,
-		Key:        key,
-		PublicURL:  fmt.Sprintf("%s/%s", uc.cdnBaseURL, key),
+		Key:        stagingKey,
+		PublicURL:  fmt.Sprintf("%s/%s", uc.cdnBaseURL, finalKey),
 		Visibility: string(visibility),
 		ExpiresAt:  time.Now().UTC().Add(DefaultPresignTTL),
 	}, nil
@@ -103,7 +104,7 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		return nil, err
 	}
 	cleanKey := strings.TrimLeft(strings.TrimSpace(in.Key), "/")
-	visibility, err := model.ValidateOwnedKey(cleanKey, in.Actor.UserID)
+	visibility, finalKey, err := model.ValidateStagingKey(cleanKey, in.Actor.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,26 +152,39 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		}
 	}
 
-	publicURL := fmt.Sprintf("%s/%s", uc.cdnBaseURL, cleanKey)
+	// Atomically promote verified staging object into live serving prefix with canonical Content-Type,
+	// closing both pre-confirm unverified serving AND post-confirm TOCTOU overwrite via reused presigned URLs.
+	promotedETag, err := uc.store.CopyObject(ctx, cleanKey, finalKey, mimeType)
+	if err != nil {
+		return nil, apperr.External("failed to promote verified upload", err)
+	}
+	if promotedETag == "" {
+		promotedETag = meta.ETag
+	}
+	_ = uc.store.DeleteObject(ctx, cleanKey)
+
+	publicURL := fmt.Sprintf("%s/%s", uc.cdnBaseURL, finalKey)
 	asset, err := model.NewAsset(
 		in.Actor.UserID,
 		filename,
 		mimeType,
 		meta.Size,
-		cleanKey,
+		finalKey,
 		publicURL,
 		visibility,
-		meta.ETag,
+		promotedETag,
 		"",
 		in.Metadata,
 	)
 	if err != nil {
+		_ = uc.store.DeleteObject(ctx, finalKey)
 		return nil, err
 	}
 
 	if uc.repo != nil {
 		saved, err := uc.repo.Save(ctx, asset)
 		if err != nil {
+			_ = uc.store.DeleteObject(ctx, finalKey)
 			return nil, apperr.System("failed to persist asset metadata", err)
 		}
 		asset = saved

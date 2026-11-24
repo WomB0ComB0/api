@@ -34,6 +34,18 @@ func (m *memStore) PutObject(_ context.Context, key string, body io.Reader, ct s
 	return "etag-test", nil
 }
 
+func (m *memStore) CopyObject(_ context.Context, srcKey, dstKey, ct string) (string, error) {
+	b, ok := m.objects[srcKey]
+	if !ok {
+		return "", errors.New("not found")
+	}
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	m.objects[dstKey] = cp
+	m.types[dstKey] = ct
+	return "etag-promoted", nil
+}
+
 func (m *memStore) HeadObject(_ context.Context, key string) (*port.ObjectMeta, error) {
 	b, ok := m.objects[key]
 	if !ok {
@@ -329,6 +341,72 @@ func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
 	}); err == nil {
 		t.Fatalf("expected percent-encoded purge traversal to be rejected")
 	}
+
+	// 6. Nemesis Finding 1 (Staging -> Promote): presigned PUT writes to staging/*, Confirm promotes to assets/*,
+	// deletes staging/*, prevents replay, and post-confirm overwrite of staging/* cannot mutate live assets/*!
+	if !strings.HasPrefix(pre.Key, "staging/assets/"+u1.UserID+"/") {
+		t.Fatalf("expected staging presign key, got %s", pre.Key)
+	}
+	validPNG := []byte("\x89PNG\r\n\x1a\nvalid-png-data")
+	store.objects[pre.Key] = validPNG
+	store.types[pre.Key] = "image/png"
+	confirmed, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key,
+		Filename: "photo.png",
+	})
+	if err != nil {
+		t.Fatalf("expected valid staging confirm to succeed, got %v", err)
+	}
+	if strings.HasPrefix(confirmed.Key, "staging/") || !strings.HasPrefix(confirmed.Key, "assets/"+u1.UserID+"/") {
+		t.Fatalf("expected promoted live key, got %s", confirmed.Key)
+	}
+	if _, stillInStaging := store.objects[pre.Key]; stillInStaging {
+		t.Fatalf("staging object must be removed after promotion")
+	}
+	// Replaying confirm on already-promoted staging key must fail with NotFound
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key,
+		Filename: "photo.png",
+	}); !apperr.IsType(err, apperr.TypeNotFound) {
+		t.Fatalf("expected replay confirm to return NotFound, got %v", err)
+	}
+	// Post-confirm TOCTOU: reusing the presigned URL only writes to staging/*, leaving live assets/* untouched!
+	store.objects[pre.Key] = []byte("<html>TOCTOU-evil</html>")
+	if !bytes.Equal(store.objects[confirmed.Key], validPNG) {
+		t.Fatalf("live confirmed asset was mutated by post-confirm staging overwrite")
+	}
+
+	// 7. Nemesis Finding 2: transient DB Save error on duplicate re-upload must NOT delete pre-existing live R2 object!
+	failRepo := &failingSaveRepo{AssetRepository: repo}
+	liveAsset, err := factory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:    u1,
+		Filename: "keep-me.png",
+		File:     bytes.NewReader(validPNG),
+	})
+	if err != nil {
+		t.Fatalf("initial upload failed: %v", err)
+	}
+	failFactory := application.NewFactory(store, failRepo, nil, nil, nil, "https://cdn.mikeodnis.dev", 1024)
+	if _, err := failFactory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:    u1,
+		Filename: "keep-me.png",
+		File:     bytes.NewReader(validPNG),
+	}); err == nil {
+		t.Fatalf("expected DB save failure")
+	}
+	if _, stillLive := store.objects[liveAsset.Key]; !stillLive {
+		t.Fatalf("transient DB failure on duplicate re-upload destroyed pre-existing live R2 object!")
+	}
+}
+
+type failingSaveRepo struct {
+	port.AssetRepository
+}
+
+func (*failingSaveRepo) Save(context.Context, *model.Asset) (*model.Asset, error) {
+	return nil, errors.New("transient postgres timeout")
 }
 
 type noopPurger struct{}

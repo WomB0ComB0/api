@@ -46,6 +46,18 @@ func (m *memoryStore) PutObject(_ context.Context, key string, body io.Reader, c
 	return "etag-123", nil
 }
 
+func (m *memoryStore) CopyObject(_ context.Context, srcKey, dstKey, ct string) (string, error) {
+	b, ok := m.objects[srcKey]
+	if !ok {
+		return "", errors.New("not found")
+	}
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	m.objects[dstKey] = cp
+	m.types[dstKey] = ct
+	return "etag-promoted", nil
+}
+
 func (m *memoryStore) HeadObject(_ context.Context, key string) (*port.ObjectMeta, error) {
 	b, ok := m.objects[key]
 	if !ok {

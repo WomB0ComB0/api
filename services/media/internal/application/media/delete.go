@@ -50,12 +50,13 @@ func (uc *DeleteAssetUseCase) Execute(ctx context.Context, in DeleteAssetInput) 
 	if err := uc.store.DeleteObject(ctx, asset.R2Key); err != nil {
 		return apperr.External("failed to delete object from storage", err)
 	}
+	// Emit AssetDeletedEvent right after R2 deletion succeeds so Cloudflare Edge Cache is
+	// always purged even if the subsequent DB metadata delete hits a transient error.
+	asset.MarkDeleted()
+	_ = uc.bus.Publish(ctx, asset.PullEvents()...)
+
 	if err := uc.repo.Delete(ctx, asset.ID); err != nil && !apperr.IsType(err, apperr.TypeNotFound) {
 		return apperr.System("failed to delete asset metadata", err)
 	}
-
-	// Emit domain event (Cloudflare purge subscriber reacts asynchronously/decoupled)
-	asset.MarkDeleted()
-	_ = uc.bus.Publish(ctx, asset.PullEvents()...)
 	return nil
 }

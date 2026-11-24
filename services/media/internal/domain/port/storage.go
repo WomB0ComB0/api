@@ -22,6 +22,7 @@ type ObjectMeta struct {
 // ObjectStore is the outbound object-storage port (implemented by Cloudflare R2 adapter).
 type ObjectStore interface {
 	PutObject(ctx context.Context, key string, body io.Reader, contentType string) (etag string, err error)
+	CopyObject(ctx context.Context, srcKey, dstKey, contentType string) (etag string, err error)
 	HeadObject(ctx context.Context, key string) (*ObjectMeta, error)
 	ReadObjectHead(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	DeleteObject(ctx context.Context, key string) error

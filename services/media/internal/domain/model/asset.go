@@ -103,6 +103,34 @@ func BuildObjectKey(vis Visibility, userID, leaf string) string {
 	return fmt.Sprintf("%s/%s/%s", prefix, userID, leaf)
 }
 
+// BuildStagingKey produces a non-servable staging key for presigned direct-to-R2 PUTs:
+//   - public  -> staging/assets/<user_id>/<leaf>
+//   - private -> staging/private/<user_id>/<leaf>
+//
+// Objects under staging/* are never served by cdn.mikeodnis.dev and must be verified
+// and promoted to assets/* or private/* by ConfirmUpload.
+func BuildStagingKey(vis Visibility, userID, leaf string) string {
+	return "staging/" + BuildObjectKey(vis, userID, leaf)
+}
+
+// ValidateStagingKey enforces that a presigned upload key belongs to userID under staging/*
+// and returns the bound visibility plus the final live R2 destination key.
+func ValidateStagingKey(key, userID string) (Visibility, string, error) {
+	clean := strings.TrimLeft(strings.TrimSpace(key), "/")
+	if clean == "" || strings.Contains(clean, "..") || strings.Contains(clean, `\`) {
+		return "", "", apperr.Validation("invalid object key")
+	}
+	if !strings.HasPrefix(clean, "staging/") {
+		return "", "", apperr.Validation("key must be a presigned staging key")
+	}
+	finalKey := strings.TrimPrefix(clean, "staging/")
+	vis, err := ValidateOwnedKey(finalKey, userID)
+	if err != nil {
+		return "", "", err
+	}
+	return vis, finalKey, nil
+}
+
 // ValidateOwnedKey enforces that an object key contains no traversal and belongs to userID.
 func ValidateOwnedKey(key, userID string) (Visibility, error) {
 	clean := strings.TrimLeft(strings.TrimSpace(key), "/")

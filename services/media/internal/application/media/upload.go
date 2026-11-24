@@ -115,6 +115,11 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 	hashHex := hex.EncodeToString(hash.Sum(nil))
 	r2Key := model.BuildObjectKey(visibility, in.Actor.UserID, hashHex[:32]+filename.Ext)
 
+	// Record whether this content-addressed key already existed so a transient DB Save
+	// failure on a duplicate re-upload never destroys a live, previously confirmed object.
+	_, headErr := uc.store.HeadObject(ctx, r2Key)
+	existedBefore := headErr == nil
+
 	etag, err := uc.store.PutObject(ctx, r2Key, in.File, mimeType)
 	if err != nil {
 		return nil, apperr.External("failed to upload object to storage", err)
@@ -134,14 +139,18 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 		map[string]any{},
 	)
 	if err != nil {
-		_ = uc.store.DeleteObject(ctx, r2Key)
+		if !existedBefore {
+			_ = uc.store.DeleteObject(ctx, r2Key)
+		}
 		return nil, err
 	}
 
 	if uc.repo != nil {
 		saved, err := uc.repo.Save(ctx, asset)
 		if err != nil {
-			_ = uc.store.DeleteObject(ctx, r2Key)
+			if !existedBefore {
+				_ = uc.store.DeleteObject(ctx, r2Key)
+			}
 			return nil, apperr.System("failed to persist asset metadata", err)
 		}
 		asset = saved
