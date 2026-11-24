@@ -24,6 +24,10 @@ const envSchema = z.object({
   OTEL_SERVICE_NAME: z.string().default('core-service'),
   RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(100),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(10),
+  RATE_LIMIT_WRITE_MAX: z.coerce.number().int().min(1).default(30),
+  UPSTASH_REDIS_REST_URL: z.string().optional(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
 });
 
 export interface AppConfig {
@@ -40,6 +44,10 @@ export interface AppConfig {
   otelServiceName: string;
   rateLimitMax: number;
   rateLimitWindowMs: number;
+  rateLimitAuthMax: number;
+  rateLimitWriteMax: number;
+  upstashRedisUrl?: string | undefined;
+  upstashRedisToken?: string | undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -82,6 +90,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     otelServiceName: parsed.OTEL_SERVICE_NAME,
     rateLimitMax: parsed.RATE_LIMIT_MAX,
     rateLimitWindowMs: parsed.RATE_LIMIT_WINDOW_MS,
+    rateLimitAuthMax: parsed.RATE_LIMIT_AUTH_MAX,
+    rateLimitWriteMax: parsed.RATE_LIMIT_WRITE_MAX,
+    upstashRedisUrl: parsed.UPSTASH_REDIS_REST_URL || undefined,
+    upstashRedisToken: parsed.UPSTASH_REDIS_REST_TOKEN || undefined,
   };
 }
 

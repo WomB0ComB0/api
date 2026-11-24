@@ -10,16 +10,20 @@ import { createHealthModule } from './modules/health/index.js';
 import { createUsersModule } from './modules/users/index.js';
 import { createUtilityModule } from './modules/utility/index.js';
 import { createRequestLoggerPlugin } from './plugins/logger.js';
-import { createRateLimitPlugin } from './plugins/rateLimit.js';
+import { createRateLimitPlugin, RateLimitMetricsTracker } from './plugins/rateLimit.js';
 import { createSecurityHeadersPlugin } from './plugins/security.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
   db: Database;
+  enableRateLimitInTest?: boolean;
 }
 
 export function buildApp(options: BuildAppOptions) {
   const { config, db } = options;
+  const rateLimitMetrics = new RateLimitMetricsTracker(
+    config.upstashRedisUrl && config.upstashRedisToken ? 'redis' : 'memory'
+  );
 
   return new Elysia({ name: 'core-service' })
     .onError(({ code, error }) => {
@@ -68,14 +72,31 @@ export function buildApp(options: BuildAppOptions) {
         credentials: true,
         maxAge: 86_400,
         allowedHeaders: ['Accept', 'Authorization', 'Content-Type', 'X-API-Key', 'X-Request-ID'],
-        exposeHeaders: ['X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Server-Timing'],
+        exposeHeaders: [
+          'X-Request-ID',
+          'RateLimit-Limit',
+          'RateLimit-Remaining',
+          'RateLimit-Reset',
+          'RateLimit-Policy',
+          'Retry-After',
+          'X-RateLimit-Limit',
+          'X-RateLimit-Remaining',
+          'X-RateLimit-Reset',
+          'Server-Timing',
+        ],
       })
     )
     .use(
       createRateLimitPlugin({
         max: config.rateLimitMax,
         windowMs: config.rateLimitWindowMs,
-        enabled: config.nodeEnv !== 'test',
+        authMax: config.rateLimitAuthMax,
+        writeMax: config.rateLimitWriteMax,
+        jwtSecret: config.jwtSecret,
+        upstashRedisUrl: config.upstashRedisUrl,
+        upstashRedisToken: config.upstashRedisToken,
+        metrics: rateLimitMetrics,
+        enabled: options.enableRateLimitInTest ?? config.nodeEnv !== 'test',
       })
     )
     .use(
@@ -141,7 +162,7 @@ export function buildApp(options: BuildAppOptions) {
     )
     .group('/v1/core', (group) =>
       group
-        .use(createUtilityModule(config))
+        .use(createUtilityModule(config, rateLimitMetrics))
         .use(createHealthModule(db))
         .use(createAuthModule(db, config))
         .use(createUsersModule(db, config))

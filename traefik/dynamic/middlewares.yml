@@ -26,6 +26,14 @@ http:
         accessControlExposeHeaders:
           - Content-Length
           - X-Request-ID
+          - RateLimit-Limit
+          - RateLimit-Remaining
+          - RateLimit-Reset
+          - RateLimit-Policy
+          - Retry-After
+          - X-RateLimit-Limit
+          - X-RateLimit-Remaining
+          - X-RateLimit-Reset
         accessControlAllowCredentials: true
         accessControlMaxAge: 86400
         addVaryHeader: true
@@ -50,9 +58,21 @@ http:
       compress:
         minResponseBodyBytes: 1024
 
-    # Rate limiting (global)
+    # Rate limiting (tiered edge ceilings)
     global-ratelimit:
       rateLimit:
         average: 1000
         burst: 500
+        period: 1m
+
+    auth-ratelimit:
+      rateLimit:
+        average: 30
+        burst: 15
+        period: 1m
+
+    write-ratelimit:
+      rateLimit:
+        average: 120
+        burst: 40
         period: 1m

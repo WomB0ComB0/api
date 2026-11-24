@@ -19,6 +19,20 @@ export const UtilityModel = {
       heap_used: t.Number(),
       external: t.Number(),
     }),
+    rate_limiter: t.Optional(
+      t.Object({
+        store_mode: t.Union([t.Literal('redis'), t.Literal('memory')]),
+        evaluated: t.Number(),
+        allowed: t.Number(),
+        limited_429: t.Number(),
+        limited_by_policy: t.Record(t.String(), t.Number()),
+        store_errors: t.Number(),
+        store_timeouts: t.Number(),
+        circuit_open_trips: t.Number(),
+        local_fallback_hits: t.Number(),
+        eval_p95_ms: t.Number(),
+      })
+    ),
   }),
   versionResponse: t.Object({
     service: t.Literal('core'),

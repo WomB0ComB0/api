@@ -2,6 +2,7 @@ import { record } from '@elysiajs/opentelemetry';
 import { Elysia, status } from 'elysia';
 import pkg from '../../../package.json' with { type: 'json' };
 import type { AppConfig } from '../../config.js';
+import type { RateLimitMetricsTracker } from '../../plugins/rateLimit.js';
 import { UtilityModel } from './model.js';
 
 const APP_VERSION = pkg.version || '1.0.0';
@@ -10,7 +11,7 @@ function toMB(bytes: number): number {
   return Number((bytes / 1024 / 1024).toFixed(2));
 }
 
-export function createUtilityModule(config: AppConfig) {
+export function createUtilityModule(config: AppConfig, rateLimitMetrics?: RateLimitMetricsTracker) {
   return new Elysia({ name: 'core.utility' })
     .get(
       '',
@@ -49,6 +50,7 @@ export function createUtilityModule(config: AppConfig) {
               heap_used: toMB(mem.heapUsed),
               external: toMB(mem.external),
             },
+            ...(rateLimitMetrics ? { rate_limiter: rateLimitMetrics.snapshot() } : {}),
           };
         }),
       {
