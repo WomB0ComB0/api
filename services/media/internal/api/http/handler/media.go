@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -42,7 +43,12 @@ func actorFromRequest(r *http.Request) media.Actor {
 func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(multipartMemoryLimit); err != nil {
-		writeAppError(w, apperr.Validation("invalid multipart form or file exceeds maximum size"))
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeAppError(w, apperr.TooLarge("file exceeds maximum allowed size"))
+			return
+		}
+		writeAppError(w, apperr.Validation("invalid multipart form"))
 		return
 	}
 	if r.MultipartForm != nil {
