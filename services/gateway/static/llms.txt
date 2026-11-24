@@ -1,0 +1,29 @@
+# api.mikeodnis.dev
+
+> Shared multi-service API gateway powering the *.mikeodnis.dev ecosystem: ElysiaJS + Bun Core Auth/Users API, Go Chi Media/R2 Upload API, Hasura GraphQL Engine, and Health Aggregator behind Caddy on Railway.
+
+## Documentation & Discovery
+
+- [API Console & Reference](https://api.mikeodnis.dev/): Human-readable Live Console overview, live health telemetry, rate limits, and working curl examples.
+- [Unified Interactive OpenAPI Docs](https://api.mikeodnis.dev/docs): Multi-spec Scalar UI covering both Core API and Media API.
+- [Core API Interactive Docs](https://api.mikeodnis.dev/v1/core/docs): Scalar reference for `/v1/core/*`.
+- [Core OpenAPI 3.1 JSON](https://api.mikeodnis.dev/v1/core/openapi.json): Machine-readable Core API schema.
+- [Media OpenAPI 3.0 JSON](https://api.mikeodnis.dev/v1/media/openapi.json): Machine-readable Media API schema.
+- [Full LLM Technical Reference](https://api.mikeodnis.dev/llms-full.txt): Complete endpoints, authentication flows, rate-limit tiers, and working examples.
+- [Security Contact](https://api.mikeodnis.dev/.well-known/security.txt): RFC 9116 vulnerability reporting.
+
+## Services
+
+- **Core Service (`/v1/core`)**: ElysiaJS + Bun — registration, login, rotating refresh tokens, HS256 JWTs with Hasura claims, scoped `mk_live_*` API keys, user profiles, and runtime metrics (`/v1/core/status`).
+- **Media Service (`/v1/media`)**: Go Chi — direct multipart uploads (up to 100 MiB) to Cloudflare R2, presigned direct-to-R2 PUT URLs, HMAC-SHA256 private CDN URL signing, asset listing/deletion, and Cloudflare edge cache purging.
+- **Links GraphQL (`/v1/links/graphql`)**: Hasura GraphQL Engine serving `links.mikeodnis.dev` short-link storage and analytics.
+- **Health Aggregator (`/health`)**: Unified liveness and dependency health across all platform services.
+
+## Companion Properties (*.mikeodnis.dev)
+
+- Portfolio: https://mikeodnis.dev
+- CDN & Upload Studio PWA: https://cdn.mikeodnis.dev (Upload UI: https://cdn.mikeodnis.dev/upload)
+- Short Links: https://links.mikeodnis.dev
+- Blog: https://blog.mikeodnis.dev
+- Status: https://status.mikeodnis.dev
+- Source: https://github.com/WomB0ComB0/api

@@ -1,0 +1,45 @@
+# api.mikeodnis.dev — Shared Platform API Gateway
+# Machine-readable LLM guides:
+#   https://api.mikeodnis.dev/llms.txt
+#   https://api.mikeodnis.dev/llms-full.txt
+
+User-agent: *
+Allow: /
+Allow: /docs
+Allow: /v1/core/docs
+Allow: /v1/core/openapi.json
+Allow: /v1/media/openapi.json
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /v1/core/auth/
+Disallow: /v1/core/users
+Disallow: /v1/media/assets
+Disallow: /v1/links/
+
+User-agent: GPTBot
+Allow: /
+Allow: /docs
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /v1/core/auth/
+Disallow: /v1/core/users
+
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /docs
+Allow: /llms.txt
+Allow: /llms-full.txt
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /docs
+Allow: /llms.txt
+Allow: /llms-full.txt
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /docs
+Allow: /llms.txt
+Allow: /llms-full.txt
+
+Sitemap: https://api.mikeodnis.dev/sitemap.xml

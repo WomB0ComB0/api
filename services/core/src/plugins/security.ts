@@ -14,8 +14,9 @@ const CSP_DOCS = [
   "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-  "img-src 'self' data: https:",
-  "connect-src 'self' https://api.mikeodnis.dev https://cdn.mikeodnis.dev",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https://api.mikeodnis.dev https://cdn.mikeodnis.dev https://cdn.jsdelivr.net",
+  "worker-src 'self' blob:",
   "object-src 'none'",
   "frame-ancestors 'none'",
 ].join('; ');

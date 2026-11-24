@@ -103,6 +103,12 @@ export function buildApp(options: BuildAppOptions) {
       openapi({
         path: '/v1/core/docs',
         specPath: '/v1/core/openapi.json',
+        scalar: {
+          // @elysiajs/openapi strips the leading slash from specPath when passing it to Scalar,
+          // causing /v1/core/docs to resolve v1/core/openapi.json as /v1/core/v1/core/openapi.json.
+          url: '/v1/core/openapi.json',
+          theme: 'deepSpace',
+        },
         exclude: {
           paths: ['/v1/core/docs', '/v1/core/openapi.json'],
         },

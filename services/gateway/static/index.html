@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>api.mikeodnis.dev — Shared Platform API Gateway</title>
+  <meta name="description" content="Unified multi-service API gateway for *.mikeodnis.dev: ElysiaJS Core Auth/Users API, Go Chi Media/R2 API, Hasura GraphQL Engine, and Health Aggregator." />
+  <meta name="theme-color" content="#0c0c14" />
+  <link rel="canonical" href="https://api.mikeodnis.dev/" />
+  <link rel="describedby" type="text/markdown" href="/llms.txt" title="LLM documentation index" />
+  <link rel="service-desc" type="application/openapi+json" href="/v1/core/openapi.json" title="Core API OpenAPI 3.1" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://api.mikeodnis.dev/" />
+  <meta property="og:title" content="api.mikeodnis.dev — Shared Platform API Gateway" />
+  <meta property="og:description" content="Core Auth &amp; Users (ElysiaJS/Bun), Media &amp; R2 Uploads (Go Chi), Links GraphQL (Hasura), and unified OpenAPI documentation." />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:creator" content="@mike_odnis" />
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebAPI",
+          "name": "api.mikeodnis.dev",
+          "url": "https://api.mikeodnis.dev/",
+          "documentation": "https://api.mikeodnis.dev/docs",
+          "description": "Shared multi-service API gateway powering the *.mikeodnis.dev platform with HS256 JWT + Hasura claims, scoped API keys, distributed Upstash Redis rate limiting, and Cloudflare R2 media uploads.",
+          "provider": {
+            "@type": "Person",
+            "name": "Mike Odnis",
+            "url": "https://mikeodnis.dev"
+          }
+        },
+        {
+          "@type": "FAQPage",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "How do I authenticate with api.mikeodnis.dev?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Authenticate with POST /v1/core/auth/login to receive a short-lived HS256 Bearer JWT (with Hasura claims) and rotating refresh token, or mint scoped mk_live_* API keys via POST /v1/core/auth/api-keys and pass them in the X-API-Key header."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Where are the interactive OpenAPI specs?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Unified interactive docs covering both Core API and Media API are available at https://api.mikeodnis.dev/docs. Raw schemas are served at /v1/core/openapi.json and /v1/media/openapi.json."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "What rate limits apply to api.mikeodnis.dev?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Core enforces 10 req/min on auth endpoints, 15 req/min on API key mutations, 30 req/min on writes, and 100 req/min on reads backed by Upstash Redis. Media enforces 120 req/min per IP and 20 writes / 100 reads per minute per user, emitting standard IETF RateLimit-* headers."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #0c0c14;
+      --surface-1: #11111c;
+      --surface-2: #161625;
+      --surface-3: #1e1e32;
+      --hairline: rgba(255, 255, 255, 0.08);
+      --hairline-strong: rgba(255, 255, 255, 0.16);
+      --fg: #f4f4f8;
+      --muted: #a1a1b5;
+      --faint: #71718a;
+      --brand: #a78bfa;
+      --brand-ink: #c4b5fd;
+      --brand-subtle: rgba(167, 139, 250, 0.14);
+      --live: #34d399;
+      --live-tint: rgba(52, 211, 153, 0.12);
+      --radius: 14px;
+      --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; background: var(--canvas); color: var(--fg);
+      font-family: var(--font-sans); line-height: 1.55; -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-image: radial-gradient(60rem 36rem at 50% -10%, rgba(167, 139, 250, 0.10), transparent 65%);
+      min-height: 100dvh;
+    }
+    a { color: var(--brand-ink); text-decoration: none; }
+    a:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-style: dotted; }
+    code, pre { font-family: var(--font-mono); }
+    .shell { max-width: 1080px; margin: 0 auto; padding: 1.25rem 1.25rem 4rem; }
+    .constellation {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;
+      padding: 0.65rem 0.9rem; margin-bottom: 1.75rem;
+      background: rgba(17, 17, 28, 0.85); border: 1px solid var(--hairline); border-radius: var(--radius);
+      backdrop-filter: blur(12px);
+    }
+    .constellation-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
+    .constellation-links a, .constellation-links span.here {
+      padding: 0.3rem 0.6rem; border-radius: 8px; color: var(--muted); transition: background 140ms, color 140ms;
+    }
+    .constellation-links a:hover { background: var(--surface-3); color: var(--fg); text-decoration: none; }
+    .constellation-links span.here { background: var(--brand-subtle); color: var(--brand-ink); font-weight: 600; }
+    .label-mono {
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
+    }
+    .tile {
+      background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.25rem;
+    }
+    .tile:hover { border-color: var(--hairline-strong); }
+    .grid { display: grid; gap: 1rem; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+    .hero { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1.25rem; }
+    h1 { margin: 0.35rem 0 0.5rem; font-size: clamp(1.65rem, 3.2vw, 2.35rem); letter-spacing: -0.025em; line-height: 1.15; }
+    h2 { margin: 0 0 0.75rem; font-size: 1.05rem; letter-spacing: -0.01em; }
+    p { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.94rem; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.25rem 0.65rem; border-radius: 999px;
+      border: 1px solid rgba(52, 211, 153, 0.3); background: var(--live-tint); color: var(--live);
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1rem; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.86rem; font-weight: 500; padding: 0.55rem 0.95rem; border-radius: 10px;
+      border: 1px solid var(--hairline-strong); background: var(--surface-2); color: var(--fg);
+      transition: background 140ms;
+    }
+    .btn:hover { background: var(--surface-3); text-decoration: none; }
+    .btn-brand { background: var(--brand-subtle); border-color: rgba(167, 139, 250, 0.45); color: var(--brand-ink); }
+    .btn-brand:hover { background: rgba(167, 139, 250, 0.22); }
+    .stat-val { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 600; color: var(--fg); margin-top: 0.25rem; }
+    .stat-sub { font-size: 0.8rem; color: var(--faint); margin-top: 0.25rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+    th { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 500; }
+    .badge {
+      display: inline-block; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+      padding: 0.15rem 0.45rem; border-radius: 6px; background: var(--brand-subtle); color: var(--brand-ink);
+    }
+    pre {
+      margin: 0.5rem 0 0; padding: 0.9rem 1rem; overflow-x: auto;
+      background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px;
+      font-size: 0.8rem; color: #e2e8f0;
+    }
+    .faq details { border-bottom: 1px solid var(--hairline); padding: 0.75rem 0; }
+    .faq details:last-child { border-bottom: 0; }
+    .faq summary { cursor: pointer; font-weight: 500; color: var(--fg); font-size: 0.92rem; }
+    .faq details p { margin: 0.5rem 0 0; }
+    footer {
+      margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline);
+      display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem; font-size: 0.8rem; color: var(--faint);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="constellation" aria-label="*.mikeodnis.dev network">
+      <span class="label-mono">*.mikeodnis.dev</span>
+      <div class="constellation-links">
+        <a href="https://mikeodnis.dev">Portfolio</a>
+        <a href="https://links.mikeodnis.dev">Links</a>
+        <a href="https://blog.mikeodnis.dev">Blog</a>
+        <a href="https://news.mikeodnis.dev">News</a>
+        <span class="here" aria-current="page">API</span>
+        <a href="https://cdn.mikeodnis.dev">CDN</a>
+        <a href="https://status.mikeodnis.dev">Status</a>
+        <a href="https://mikeodnis.dev/sponsor">Sponsor</a>
+      </div>
+    </nav>
+
+    <main class="grid">
+      <section class="tile">
+        <div class="hero">
+          <div>
+            <span class="label-mono">Platform API Gateway · Caddy · Bun · Go · Hasura</span>
+            <h1>api.mikeodnis.dev</h1>
+            <p style="max-width:64ch">
+              Shared polyglot API gateway powering the <code>*.mikeodnis.dev</code> ecosystem — unified HS256 JWT + Hasura auth,
+              scoped <code>mk_live_*</code> API keys, Cloudflare R2 media uploads, distributed Upstash Redis rate limiting, and OpenTelemetry tracing.
+            </p>
+            <div class="actions">
+              <a class="btn btn-brand" href="/docs">Unified API Docs (Core + Media) →</a>
+              <a class="btn" href="/v1/core/docs">Core Docs</a>
+              <a class="btn" href="https://cdn.mikeodnis.dev/upload">CDN Upload Studio</a>
+              <a class="btn" href="/llms.txt">llms.txt</a>
+            </div>
+          </div>
+          <div id="live-pill" class="pill" aria-live="polite">
+            <span class="dot"></span>
+            <span id="live-pill-text">Gateway operational</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid grid-4" aria-label="Mounted services">
+        <div class="tile">
+          <div class="label-mono">ElysiaJS · Bun</div>
+          <div class="stat-val"><code>/v1/core</code></div>
+          <div class="stat-sub">Auth, rotating refresh tokens, <code>mk_live_*</code> keys, users, status</div>
+        </div>
+        <div class="tile">
+          <div class="label-mono">Go · Chi</div>
+          <div class="stat-val"><code>/v1/media</code></div>
+          <div class="stat-sub">R2 multipart &amp; presigned uploads, HMAC URL signing, edge purge</div>
+        </div>
+        <div class="tile">
+          <div class="label-mono">Hasura GraphQL</div>
+          <div class="stat-val"><code>/v1/links/graphql</code></div>
+          <div class="stat-sub">Short-link persistence and analytics backing links.mikeodnis.dev</div>
+        </div>
+        <div class="tile">
+          <div class="label-mono">Observability</div>
+          <div class="stat-val"><code>/health</code></div>
+          <div class="stat-sub">Aggregated service liveness, DB readiness &amp; Redis limiter telemetry</div>
+        </div>
+      </section>
+
+      <section class="tile">
+        <h2>Rate-Limit Policies (IETF Draft Headers)</h2>
+        <p>Every response emits standard <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code>, <code>RateLimit-Reset</code>, <code>RateLimit-Policy</code>, and <code>Retry-After</code> on HTTP 429.</p>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Service</th>
+                <th>Tier</th>
+                <th>Quota</th>
+                <th>Keying</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Core</td><td><span class="badge">auth</span></td><td>10 req / 60s</td><td>Client IP (login, register, refresh)</td></tr>
+              <tr><td>Core</td><td><span class="badge">auth-keys</span></td><td>15 req / 60s</td><td>User ID / API key hash / IP</td></tr>
+              <tr><td>Core</td><td><span class="badge">write</span></td><td>30 req / 60s</td><td>User ID / API key hash / IP</td></tr>
+              <tr><td>Core</td><td><span class="badge">read</span></td><td>100 req / 60s</td><td>User ID / API key hash / IP</td></tr>
+              <tr><td>Media</td><td><span class="badge">media-write</span></td><td>20 req / 60s</td><td>Authenticated User ID (120/min IP ceiling)</td></tr>
+              <tr><td>Media</td><td><span class="badge">media-read</span></td><td>100 req / 60s</td><td>Authenticated User ID (120/min IP ceiling)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid grid-2">
+        <div class="tile">
+          <h2>Working Quick-Start Examples</h2>
+          <p>Check runtime health &amp; Redis rate-limiter mode:</p>
+          <pre><code>curl -sS https://api.mikeodnis.dev/v1/core/status</code></pre>
+          <p style="margin-top:0.85rem">Sign in and upload an asset to <code>cdn.mikeodnis.dev</code>:</p>
+          <pre><code>JWT=$(curl -sS -X POST https://api.mikeodnis.dev/v1/core/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@mikeodnis.dev","password":"..."}' | jq -r .access_token)
+
+curl -sS -X POST https://api.mikeodnis.dev/v1/media/upload \
+  -H "Authorization: Bearer $JWT" \
+  -F "file=@./image.png" -F "visibility=public"</code></pre>
+        </div>
+
+        <div class="tile">
+          <h2>OpenAPI, LLM &amp; Security Discovery</h2>
+          <p>Machine-readable contracts for SDKs, AI agents, and security researchers:</p>
+          <table>
+            <tbody>
+              <tr><td><a href="/docs"><code>/docs</code></a></td><td>Unified Scalar UI (Core + Media)</td></tr>
+              <tr><td><a href="/v1/core/openapi.json"><code>/v1/core/openapi.json</code></a></td><td>Core API OpenAPI 3.1 JSON</td></tr>
+              <tr><td><a href="/v1/media/openapi.json"><code>/v1/media/openapi.json</code></a></td><td>Media API OpenAPI 3.0 JSON</td></tr>
+              <tr><td><a href="/llms.txt"><code>/llms.txt</code></a> &amp; <a href="/llms-full.txt"><code>/llms-full.txt</code></a></td><td>LLM &amp; AEO Markdown guides</td></tr>
+              <tr><td><a href="/.well-known/security.txt"><code>/.well-known/security.txt</code></a></td><td>RFC 9116 security contact</td></tr>
+              <tr><td><a href="/robots.txt"><code>/robots.txt</code></a> &amp; <a href="/sitemap.xml"><code>/sitemap.xml</code></a></td><td>Crawler &amp; sitemap directives</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="tile faq">
+        <h2>Frequently Asked Questions</h2>
+        <details open>
+          <summary>How do JSON API clients use the root endpoint?</summary>
+          <p><code>GET /</code> uses content negotiation: browsers receive this Live Console page, while non-HTML API clients (<code>Accept: application/json</code> or default <code>curl</code>) receive the machine-readable JSON route descriptor.</p>
+        </details>
+        <details>
+          <summary>Can I upload files without writing curl commands?</summary>
+          <p>Yes — open <a href="https://cdn.mikeodnis.dev/upload">cdn.mikeodnis.dev/upload</a> (installable PWA on Android and Desktop) to sign in, drag-and-drop, paste screenshots, or share directly from your phone into Cloudflare R2.</p>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <span>© 2026 Mike Odnis · <a href="https://github.com/WomB0ComB0/api">WomB0ComB0/api</a> (Apache-2.0)</span>
+      <span id="status-foot">Probing /v1/core/status…</span>
+    </footer>
+  </div>
+
+  <script>
+    fetch('/v1/core/status').then(r => r.json()).then(d => {
+      const foot = document.getElementById('status-foot');
+      const pill = document.getElementById('live-pill-text');
+      if (d && d.status === 'ok') {
+        const mode = d.rate_limiter?.store_mode || 'active';
+        if (pill) pill.textContent = 'Live · limiter: ' + mode;
+        if (foot) foot.textContent = 'Core v' + (d.version || '1.0.0') + ' · uptime ' + Math.floor(d.uptime_seconds || 0) + 's · rate-limiter ' + mode;
+      }
+    }).catch(() => {});
+  </script>
+</body>
+</html>

@@ -23,8 +23,9 @@
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		?Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		?Cross-Origin-Resource-Policy "same-site"
 	}
 
 	@gwhealth path /gateway/health
@@ -40,6 +41,55 @@
 			header_up Host {upstream_hostport}
 			import proxy_defaults
 		}
+	}
+
+	# Static LLM, AEO, OpenAPI portal, and RFC 9116 security discovery routes for api.mikeodnis.dev
+	@securitytxt path /.well-known/security.txt
+	handle @securitytxt {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=86400"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		rewrite * /security.txt
+		root * /srv/static
+		file_server
+	}
+
+	@robots path /robots.txt
+	handle @robots {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=3600"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		root * /srv/static
+		file_server
+	}
+
+	@sitemap path /sitemap.xml
+	handle @sitemap {
+		header Content-Type "application/xml; charset=utf-8"
+		header Cache-Control "public, max-age=3600"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		root * /srv/static
+		file_server
+	}
+
+	@llms path /llms.txt /llms-full.txt
+	handle @llms {
+		header Content-Type "text/markdown; charset=utf-8"
+		header Cache-Control "public, max-age=3600"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		header Link `<https://api.mikeodnis.dev/llms.txt>; rel="describedby"; type="text/markdown", <https://api.mikeodnis.dev/v1/core/openapi.json>; rel="service-desc"; type="application/openapi+json"`
+		root * /srv/static
+		file_server
+	}
+
+	@docs path /docs /docs/
+	handle @docs {
+		header Content-Type "text/html; charset=utf-8"
+		header Cache-Control "public, max-age=300"
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src 'self' https://api.mikeodnis.dev https://cdn.mikeodnis.dev https://cdn.jsdelivr.net; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"
+		rewrite * /docs.html
+		root * /srv/static
+		file_server
 	}
 
 	@health path /health
@@ -71,8 +121,23 @@
 		}
 	}
 
+	@root_html {
+		path /
+		header Accept *text/html*
+	}
+	handle @root_html {
+		header Content-Type "text/html; charset=utf-8"
+		header Cache-Control "public, max-age=300"
+		header Link `<https://api.mikeodnis.dev/llms.txt>; rel="describedby"; type="text/markdown", <https://api.mikeodnis.dev/v1/core/openapi.json>; rel="service-desc"; type="application/openapi+json", <https://api.mikeodnis.dev/.well-known/security.txt>; rel="security"`
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		rewrite * /index.html
+		root * /srv/static
+		file_server
+	}
+
 	handle {
 		header Content-Type application/json
-		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"]}` 200
+		header Link `<https://api.mikeodnis.dev/llms.txt>; rel="describedby"; type="text/markdown", <https://api.mikeodnis.dev/v1/core/openapi.json>; rel="service-desc"; type="application/openapi+json"`
+		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"],"docs":["https://api.mikeodnis.dev/docs","https://api.mikeodnis.dev/v1/core/docs"],"openapi":["https://api.mikeodnis.dev/v1/core/openapi.json","https://api.mikeodnis.dev/v1/media/openapi.json"],"llms":"https://api.mikeodnis.dev/llms.txt","security":"https://api.mikeodnis.dev/.well-known/security.txt","upload_studio":"https://cdn.mikeodnis.dev/upload"}` 200
 	}
 }

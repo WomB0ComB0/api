@@ -321,6 +321,13 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(spec.paths['/v1/core/status']).toBeDefined();
     expect(spec.paths['/v1/core/version']).toBeDefined();
     expect(spec.paths['/v1/core/info']).toBeDefined();
+
+    // Regression check: Scalar must point to root-relative /v1/core/openapi.json (leading slash)
+    const docsRes = await app.handle(new Request('http://localhost/v1/core/docs'));
+    expect(docsRes.status).toBe(200);
+    const docsHtml = await docsRes.text();
+    expect(docsHtml).toContain('/v1/core/openapi.json');
+    expect(docsHtml).not.toContain('&quot;url&quot;:&quot;v1/core/openapi.json&quot;');
   });
 
   test('utility endpoints, HEAD probes, security headers, Server-Timing, and X-Request-ID', async () => {
