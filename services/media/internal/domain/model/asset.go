@@ -43,14 +43,50 @@ type Filename struct {
 	Ext  string
 }
 
+var windowsReservedStems = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+func containsUnsafeFilenameRune(s string) bool {
+	for _, r := range s {
+		// Reject ASCII control chars (incl. NUL) and DEL
+		if r < 0x20 || r == 0x7F {
+			return true
+		}
+		// Reject Unicode bidirectional override/isolate controls (CVE-2021-42574 Trojan Source)
+		if (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) || r == 0x200E || r == 0x200F || r == 0x061C {
+			return true
+		}
+	}
+	return false
+}
+
 func ParseFilename(raw string) (Filename, error) {
-	base := filepath.Base(strings.TrimSpace(raw))
-	if base == "" || base == "." || base == "/" || strings.Contains(base, "..") || strings.ContainsAny(base, `/\`) {
+	if containsUnsafeFilenameRune(raw) {
+		return Filename{}, apperr.Validation("filename contains disallowed control or bidirectional characters")
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || len(trimmed) > 255 {
+		return Filename{}, apperr.Validation("invalid filename")
+	}
+	if strings.HasSuffix(trimmed, ".") {
+		return Filename{}, apperr.Validation("invalid filename")
+	}
+	base := filepath.Base(trimmed)
+	if base == "" || base == "." || base == "/" || strings.HasPrefix(base, ".") || strings.Contains(base, "..") || strings.ContainsAny(base, `/\`) {
 		return Filename{}, apperr.Validation("invalid filename")
 	}
 	ext := strings.ToLower(filepath.Ext(base))
 	if !allowedExtensions[ext] {
 		return Filename{}, apperr.Validation(fmt.Sprintf("file extension %q is not allowed", ext))
+	}
+	stem := strings.ToUpper(strings.TrimSuffix(base, filepath.Ext(base)))
+	if stem == "" || windowsReservedStems[stem] {
+		return Filename{}, apperr.Validation("invalid filename")
 	}
 	return Filename{Base: base, Ext: ext}, nil
 }
@@ -115,8 +151,8 @@ func NewAsset(
 	if strings.TrimSpace(userID) == "" {
 		return nil, apperr.Validation("user_id is required")
 	}
-	if sizeBytes < 0 {
-		return nil, apperr.Validation("size_bytes must be non-negative")
+	if sizeBytes <= 0 {
+		return nil, apperr.Validation("size_bytes must be positive")
 	}
 	if metadata == nil {
 		metadata = map[string]any{}

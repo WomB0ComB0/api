@@ -42,6 +42,17 @@ func (m *memStore) HeadObject(_ context.Context, key string) (*port.ObjectMeta, 
 	return &port.ObjectMeta{Size: int64(len(b)), ContentType: m.types[key], ETag: "etag-test"}, nil
 }
 
+func (m *memStore) ReadObjectHead(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+	b, ok := m.objects[key]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	if int64(len(b)) > maxBytes {
+		return b[:maxBytes], nil
+	}
+	return b, nil
+}
+
 func (m *memStore) DeleteObject(_ context.Context, key string) error {
 	delete(m.objects, key)
 	return nil
@@ -240,5 +251,63 @@ func TestListAssetsIsNPlusOneFree(t *testing.T) {
 	batched, err := repo.FindByIDs(context.Background(), ids)
 	if err != nil || len(batched) != 20 || repo.queries != 1 {
 		t.Fatalf("expected 20 batched assets in 1 query, got len=%d queries=%d err=%v", len(batched), repo.queries, err)
+	}
+}
+
+func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
+	store := &memStore{objects: map[string][]byte{}, types: map[string]string{}}
+	repo := &memRepo{assets: map[string]*model.Asset{}}
+	factory := application.NewFactory(store, repo, nil, nil, nil, "https://cdn.mikeodnis.dev", 1024)
+	u1 := media.Actor{UserID: uuid.NewString(), Role: "user"}
+
+	// 1. Late-body SVG <script> past byte 512 must be rejected before R2 PutObject
+	padding := strings.Repeat(" ", 600)
+	evilSVG := `<svg xmlns="http://www.w3.org/2000/svg">` + padding + `<script>alert(1)</script></svg>`
+	if _, err := factory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:             u1,
+		Filename:          "logo.svg",
+		HeaderContentType: "image/svg+xml",
+		File:              bytes.NewReader([]byte(evilSVG)),
+	}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected late-body SVG script rejection, got %v", err)
+	}
+	if len(store.objects) != 0 {
+		t.Fatalf("rejected SVG must not be stored in R2")
+	}
+
+	// 2. Presign confirm with spoofed bytes must reject AND delete the object from R2
+	pre, err := factory.PresignUpload().Execute(context.Background(), media.PresignInput{
+		Actor:       u1,
+		Filename:    "photo.png",
+		ContentType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("presign failed: %v", err)
+	}
+	store.objects[pre.Key] = []byte("<html><script>evil()</script></html>")
+	store.types[pre.Key] = "image/png"
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key,
+		Filename: "photo.png",
+	}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected spoofed presign confirm rejection, got %v", err)
+	}
+	if _, exists := store.objects[pre.Key]; exists {
+		t.Fatalf("spoofed presigned object must be purged from R2 on failed confirm")
+	}
+
+	// 3. Presign confirm exceeding maxUploadBytes must reject (413) AND delete from R2
+	store.objects[pre.Key] = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 2048)...)
+	store.types[pre.Key] = "image/png"
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key,
+		Filename: "photo.png",
+	}); !apperr.IsType(err, apperr.TypeTooLarge) {
+		t.Fatalf("expected oversized presign confirm rejection (413), got %v", err)
+	}
+	if _, exists := store.objects[pre.Key]; exists {
+		t.Fatalf("oversized presigned object must be purged from R2 on failed confirm")
 	}
 }

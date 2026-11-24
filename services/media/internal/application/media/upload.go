@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"api/media/internal/domain/event"
@@ -80,16 +79,40 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 		return nil, apperr.System("failed to hash uploaded file", err)
 	}
 	totalSize := int64(n) + rest
+	if totalSize == 0 {
+		return nil, apperr.Validation("uploaded file is empty")
+	}
 	if totalSize > uc.maxUploadBytes {
 		return nil, apperr.TooLarge("file exceeds maximum allowed size")
+	}
+
+	mimeType, err := model.ValidateUploadContent(filename, in.HeaderContentType, sniffBuf)
+	if err != nil {
+		return nil, err
 	}
 
 	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
 		return nil, apperr.System("failed to rewind uploaded file", err)
 	}
 
+	// Scan full SVG body (not just the first 512 bytes) to block scripts/event handlers/XXE anywhere in the document.
+	if filename.Ext == ".svg" {
+		if totalSize > model.MaxSVGBytes {
+			return nil, apperr.TooLarge("SVG file exceeds maximum allowed size (2 MiB)")
+		}
+		svgBytes, readErr := io.ReadAll(io.LimitReader(in.File, model.MaxSVGBytes+1))
+		if readErr != nil {
+			return nil, apperr.System("failed to inspect SVG file", readErr)
+		}
+		if err := model.ValidateSVGContent(svgBytes); err != nil {
+			return nil, err
+		}
+		if _, err := in.File.Seek(0, io.SeekStart); err != nil {
+			return nil, apperr.System("failed to rewind uploaded file", err)
+		}
+	}
+
 	hashHex := hex.EncodeToString(hash.Sum(nil))
-	mimeType := resolveContentType(in.HeaderContentType, sniffBuf, filename.Ext)
 	r2Key := model.BuildObjectKey(visibility, in.Actor.UserID, hashHex[:32]+filename.Ext)
 
 	etag, err := uc.store.PutObject(ctx, r2Key, in.File, mimeType)
@@ -131,34 +154,4 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 
 	dto := ToAssetDTO(asset, uc.cdnBaseURL, uc.signer)
 	return &dto, nil
-}
-
-func resolveContentType(headerType string, sniff []byte, ext string) string {
-	switch ext {
-	case ".svg":
-		return "image/svg+xml"
-	case ".webp":
-		return "image/webp"
-	case ".woff2":
-		return "font/woff2"
-	}
-
-	detected := http.DetectContentType(sniff)
-	if detected != "" && detected != "application/octet-stream" {
-		if strings.HasPrefix(detected, "text/plain") {
-			switch ext {
-			case ".json":
-				return "application/json"
-			case ".csv":
-				return "text/csv"
-			case ".md":
-				return "text/markdown"
-			}
-		}
-		return detected
-	}
-	if headerType != "" {
-		return headerType
-	}
-	return "application/octet-stream"
 }

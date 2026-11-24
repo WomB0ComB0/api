@@ -54,6 +54,17 @@ func (m *memoryStore) HeadObject(_ context.Context, key string) (*port.ObjectMet
 	return &port.ObjectMeta{Size: int64(len(b)), ContentType: m.types[key], ETag: "etag-123"}, nil
 }
 
+func (m *memoryStore) ReadObjectHead(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+	b, ok := m.objects[key]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	if int64(len(b)) > maxBytes {
+		return b[:maxBytes], nil
+	}
+	return b, nil
+}
+
 func (m *memoryStore) DeleteObject(_ context.Context, key string) error {
 	delete(m.objects, key)
 	delete(m.types, key)

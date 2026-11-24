@@ -23,6 +23,7 @@ type ObjectMeta struct {
 type ObjectStore interface {
 	PutObject(ctx context.Context, key string, body io.Reader, contentType string) (etag string, err error)
 	HeadObject(ctx context.Context, key string) (*ObjectMeta, error)
+	ReadObjectHead(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	DeleteObject(ctx context.Context, key string) error
 	ListObjects(ctx context.Context, prefix string, maxKeys int32) ([]ObjectInfo, error)
 	PresignPutObject(ctx context.Context, key string, contentType string, ttl time.Duration) (string, error)

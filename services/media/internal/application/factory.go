@@ -49,7 +49,7 @@ func (f *Factory) PresignUpload() *media.PresignUploadUseCase {
 }
 
 func (f *Factory) ConfirmUpload() *media.ConfirmUploadUseCase {
-	return media.NewConfirmUploadUseCase(f.store, f.repo, f.signer, f.bus, f.cdnBaseURL)
+	return media.NewConfirmUploadUseCase(f.store, f.repo, f.signer, f.bus, f.cdnBaseURL, f.maxUploadBytes)
 }
 
 func (f *Factory) GetAsset() *media.GetAssetUseCase {
