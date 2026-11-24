@@ -17,6 +17,7 @@ export interface BuildAppOptions {
   config: AppConfig;
   db: Database;
   enableRateLimitInTest?: boolean;
+  readyCacheTtlMs?: number;
 }
 
 export function buildApp(options: BuildAppOptions) {
@@ -169,7 +170,11 @@ export function buildApp(options: BuildAppOptions) {
     .group('/v1/core', (group) =>
       group
         .use(createUtilityModule(config, rateLimitMetrics))
-        .use(createHealthModule(db))
+        .use(
+          createHealthModule(db, {
+            readyCacheTtlMs: options.readyCacheTtlMs ?? (config.nodeEnv === 'test' ? 0 : 2_000),
+          })
+        )
         .use(createAuthModule(db, config))
         .use(createUsersModule(db, config))
     );

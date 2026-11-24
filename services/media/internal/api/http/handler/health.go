@@ -44,18 +44,38 @@ func HealthCheck(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+const defaultReadyCacheTTL = 2 * time.Second
+
 func ReadyCheck(store port.ObjectStore, repo port.AssetRepository) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	return ReadyCheckWithTTL(store, repo, defaultReadyCacheTTL)
+}
+
+// ReadyCheckWithTTL coalesces readiness probes (Postgres Ping + R2 HeadBucket) over ttl
+// so floods against the rate-limit-exempt /health/ready endpoint cannot exhaust DB pools or R2 quotas.
+func ReadyCheckWithTTL(store port.ObjectStore, repo port.AssetRepository, ttl time.Duration) http.HandlerFunc {
+	type cachedReady struct {
+		status    int
+		payload   ReadyResponse
+		expiresAt time.Time
+	}
+
+	var (
+		mu       sync.Mutex
+		cached   *cachedReady
+		inflight chan struct{}
+	)
+
+	probe := func() (int, ReadyResponse) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		var (
-			wg        sync.WaitGroup
-			checks    ReadinessChecks
-			r2Err     error
-			dbErr     error
-			hasStore  = store != nil
-			hasRepo   = repo != nil
+			wg       sync.WaitGroup
+			checks   ReadinessChecks
+			r2Err    error
+			dbErr    error
+			hasStore = store != nil
+			hasRepo  = repo != nil
 		)
 
 		if hasStore {
@@ -102,11 +122,63 @@ func ReadyCheck(store port.ObjectStore, repo port.AssetRepository) http.HandlerF
 			statusText = StatusNotReady
 		}
 
-		writeJSON(w, status, ReadyResponse{
+		return status, ReadyResponse{
 			Status:    statusText,
 			Timestamp: time.Now().UTC(),
 			Service:   "media",
 			Checks:    checks,
-		})
+		}
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ttl <= 0 {
+			status, payload := probe()
+			writeJSON(w, status, payload)
+			return
+		}
+
+		for {
+			now := time.Now()
+			mu.Lock()
+			if cached != nil && now.Before(cached.expiresAt) {
+				res := *cached
+				mu.Unlock()
+				writeJSON(w, res.status, res.payload)
+				return
+			}
+			if inflight != nil {
+				waitCh := inflight
+				mu.Unlock()
+				select {
+				case <-waitCh:
+					continue
+				case <-r.Context().Done():
+					writeJSON(w, http.StatusServiceUnavailable, ReadyResponse{
+						Status:    StatusNotReady,
+						Timestamp: time.Now().UTC(),
+						Service:   "media",
+					})
+					return
+				}
+			}
+			doneCh := make(chan struct{})
+			inflight = doneCh
+			mu.Unlock()
+
+			status, payload := probe()
+
+			mu.Lock()
+			cached = &cachedReady{
+				status:    status,
+				payload:   payload,
+				expiresAt: time.Now().Add(ttl),
+			}
+			inflight = nil
+			close(doneCh)
+			mu.Unlock()
+
+			writeJSON(w, status, payload)
+			return
+		}
 	}
 }

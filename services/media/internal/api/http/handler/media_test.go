@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,5 +337,56 @@ func TestHTTPPresignAndConfirm(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown JSON field, got %d", rec.Code)
+	}
+}
+
+type countingStore struct {
+	*memoryStore
+	checks atomic.Int32
+}
+
+func (c *countingStore) HealthCheck(ctx context.Context) error {
+	c.checks.Add(1)
+	time.Sleep(15 * time.Millisecond)
+	return c.memoryStore.HealthCheck(ctx)
+}
+
+type countingRepo struct {
+	*memoryRepo
+	checks atomic.Int32
+}
+
+func (c *countingRepo) HealthCheck(ctx context.Context) error {
+	c.checks.Add(1)
+	time.Sleep(15 * time.Millisecond)
+	return c.memoryRepo.HealthCheck(ctx)
+}
+
+func TestReadyCheckCoalescesConcurrentProbes(t *testing.T) {
+	store := &countingStore{memoryStore: newMemoryStore()}
+	repo := &countingRepo{memoryRepo: newMemoryRepo()}
+	readyHandler := handler.ReadyCheckWithTTL(store, repo, 2*time.Second)
+
+	const burst = 10
+	var wg sync.WaitGroup
+	for i := 0; i < burst; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/v1/media/health/ready", nil)
+			rec := httptest.NewRecorder()
+			readyHandler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("expected 200 from ReadyCheck, got %d", rec.Code)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := store.checks.Load(); got != 1 {
+		t.Fatalf("expected 1 coalesced R2 HealthCheck across %d concurrent probes, got %d", burst, got)
+	}
+	if got := repo.checks.Load(); got != 1 {
+		t.Fatalf("expected 1 coalesced DB HealthCheck across %d concurrent probes, got %d", burst, got)
 	}
 }

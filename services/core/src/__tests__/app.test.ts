@@ -312,6 +312,22 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(notReady.status).toBe(503);
     expect(notReady.error?.value).toMatchObject({ status: 'not_ready' });
 
+    // Single-flight readiness cache coalesces concurrent/rapid probes to prevent DB pool amplification
+    let healthChecks = 0;
+    const countingDb: Database = {
+      ...db,
+      async healthCheck() {
+        healthChecks += 1;
+        return true;
+      },
+    };
+    const cachedApp = buildApp({ config: testConfig, db: countingDb, readyCacheTtlMs: 2_000 });
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () => cachedApp.handle(new Request('http://localhost/v1/core/health/ready')))
+    );
+    for (const r of responses) expect(r.status).toBe(200);
+    expect(healthChecks).toBe(1);
+
     const openapiRes = await app.handle(new Request('http://localhost/v1/core/openapi.json'));
     expect(openapiRes.status).toBe(200);
     const spec = (await openapiRes.json()) as { openapi: string; paths: Record<string, unknown> };
