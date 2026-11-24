@@ -41,33 +41,38 @@ func OpenAPISpec(w http.ResponseWriter, _ *http.Request) {
 			"/upload": map[string]any{
 				"post": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Upload media asset",
+					"summary":  "Upload media asset (WSTG-BUSL-08/09 magic-byte + SVG verified)",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
 						"201": map[string]any{"description": "Asset uploaded and persisted"},
-						"400": map[string]any{"description": "Invalid file or extension"},
+						"400": map[string]any{"description": "Invalid file, filename, or magic-byte/MIME mismatch"},
 						"401": map[string]any{"description": "Unauthorized"},
+						"413": map[string]any{"description": "File exceeds maximum allowed size"},
 					},
 				},
 			},
 			"/presign": map[string]any{
 				"post": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Generate direct-to-R2 presigned PUT URL",
+					"summary":  "Generate direct-to-R2 presigned PUT URL targeting non-servable staging/* prefix",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
-						"200": map[string]any{"description": "Presigned upload URL generated"},
+						"200": map[string]any{"description": "Presigned staging upload URL generated"},
+						"400": map[string]any{"description": "Disallowed extension or MIME mismatch"},
 					},
 				},
 			},
 			"/assets/confirm": map[string]any{
 				"post": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Confirm presigned upload",
+					"summary":  "Verify staged upload (ETag-pinned magic-byte + SVG scan) and atomically promote to live prefix",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
-						"201": map[string]any{"description": "Asset confirmed"},
-						"404": map[string]any{"description": "Object not found in R2"},
+						"201": map[string]any{"description": "Asset verified, promoted, and persisted"},
+						"400": map[string]any{"description": "Invalid signature, SVG active content, or metadata"},
+						"404": map[string]any{"description": "Staged object not found in R2"},
+						"409": map[string]any{"description": "Upload already confirmed or object mutated during verification (ETag mismatch)"},
+						"413": map[string]any{"description": "Staged object exceeds maximum allowed size (purged)"},
 					},
 				},
 			},

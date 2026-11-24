@@ -502,6 +502,23 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     expect(meViaKey.data?.id).toBe(u1.user.id);
     expect(db.getQueryCount()).toBe(2);
 
+    // Scoped API keys must NEVER be able to mint, list, or revoke API keys (privilege escalation guard)
+    const keyMintViaKey = await api.v1.core.auth['api-keys'].post(
+      { name: 'escalated', scopes: ['write', 'media', 'links'] },
+      { headers: { 'x-api-key': rawKey } }
+    );
+    expect(keyMintViaKey.status).toBe(403);
+
+    const keyListViaKey = await api.v1.core.auth['api-keys'].get({
+      headers: { 'x-api-key': rawKey },
+    });
+    expect(keyListViaKey.status).toBe(403);
+
+    const keyRevokeViaKey = await api.v1.core.auth['api-keys']({ id: keyId }).delete(undefined, {
+      headers: { 'x-api-key': rawKey },
+    });
+    expect(keyRevokeViaKey.status).toBe(403);
+
     const revokeRes = await api.v1.core.auth['api-keys']({ id: keyId }).delete(undefined, {
       headers: { authorization: `Bearer ${u1.access_token}` },
     });
@@ -533,6 +550,17 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
       email: 'u1@example.com',
       password: 'StrongPassword123!',
     });
+
+    // Even an admin's API key cannot access JWT-only admin endpoints
+    const adminKeyCreate = await api.v1.core.auth['api-keys'].post(
+      { name: 'admin-scoped', scopes: ['read'] },
+      { headers: { authorization: `Bearer ${adminLogin.data!.access_token}` } }
+    );
+    expect(adminKeyCreate.status).toBe(201);
+    const adminViaApiKey = await api.v1.core.users.get({
+      headers: { 'x-api-key': adminKeyCreate.data!.api_key },
+    });
+    expect(adminViaApiKey.status).toBe(403);
 
     db.resetQueryCount();
     const adminList = await api.v1.core.users.get({

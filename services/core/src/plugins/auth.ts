@@ -115,7 +115,7 @@ export function createAuthMacro(db: Database, config: AppConfig) {
     .macro('admin', {
       auth: true,
       beforeHandle({ authUser }) {
-        if (authUser.role !== 'admin') {
+        if (authUser.authType !== 'jwt' || authUser.role !== 'admin') {
           return status(403, { error: 'Forbidden' });
         }
         return undefined;

@@ -127,6 +127,9 @@ export function createAuthModule(db: Database, config: AppConfig) {
     .post(
       '/api-keys',
       async ({ authUser, body }) => {
+        if (authUser.authType !== 'jwt') {
+          return status(403, { error: 'API keys cannot manage API keys; authenticate with a Bearer JWT' });
+        }
         if (containsBidiControls(body.name)) {
           return status(400, { error: 'API key name contains disallowed bidirectional control characters' });
         }
@@ -140,31 +143,41 @@ export function createAuthModule(db: Database, config: AppConfig) {
           201: AuthModel.createApiKeyResponse,
           400: AuthModel.error,
           401: AuthModel.error,
+          403: AuthModel.error,
         },
         detail: {
           tags: ['auth'],
-          summary: 'Create a scoped API key (raw key returned once)',
+          summary: 'Create a scoped API key (raw key returned once; JWT required)',
         },
       }
     )
     .get(
       '/api-keys',
-      async ({ authUser }) => service.listApiKeys(authUser.id),
+      async ({ authUser }) => {
+        if (authUser.authType !== 'jwt') {
+          return status(403, { error: 'API keys cannot list API keys; authenticate with a Bearer JWT' });
+        }
+        return service.listApiKeys(authUser.id);
+      },
       {
         auth: true,
         response: {
           200: AuthModel.listApiKeysResponse,
           401: AuthModel.error,
+          403: AuthModel.error,
         },
         detail: {
           tags: ['auth'],
-          summary: 'List active API keys for authenticated user',
+          summary: 'List active API keys for authenticated user (JWT required)',
         },
       }
     )
     .delete(
       '/api-keys/:id',
       async ({ authUser, params }) => {
+        if (authUser.authType !== 'jwt') {
+          return status(403, { error: 'API keys cannot revoke API keys; authenticate with a Bearer JWT' });
+        }
         const revoked = await service.revokeApiKey(authUser.id, params.id);
         if (!revoked) {
           return status(404, { error: 'API key not found' });
@@ -177,11 +190,12 @@ export function createAuthModule(db: Database, config: AppConfig) {
         response: {
           204: t.Void(),
           401: AuthModel.error,
+          403: AuthModel.error,
           404: AuthModel.error,
         },
         detail: {
           tags: ['auth'],
-          summary: 'Revoke an API key',
+          summary: 'Revoke an API key (JWT required)',
         },
       }
     );

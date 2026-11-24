@@ -54,8 +54,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
 
   const jwtSecret = parsed.JWT_SECRET || (parsed.NODE_ENV === 'production' ? '' : DEFAULT_DEV_JWT_SECRET);
-  if (parsed.NODE_ENV === 'production' && jwtSecret.length < 32) {
-    throw new Error('JWT_SECRET must be at least 32 characters in production');
+  if (parsed.NODE_ENV === 'production' && (jwtSecret.length < 32 || jwtSecret === DEFAULT_DEV_JWT_SECRET)) {
+    throw new Error('JWT_SECRET must be a non-default secret of at least 32 characters in production');
   }
 
   const databaseUrl =
