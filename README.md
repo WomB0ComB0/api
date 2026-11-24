@@ -8,7 +8,7 @@ Production polyglot API platform hosted end-to-end on **Railway (US East)** alon
 
 | Service | Route | Runtime & Stack | Key Capabilities |
 | :--- | :--- | :--- | :--- |
-| **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.9** | TLS termination, `zstd`/`gzip`, HSTS preload, Permissions-Policy, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`) |
+| **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.9** | TLS termination, `zstd`/`gzip`, HSTS preload, Permissions-Policy, CORP, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`), static **Live Console** portal (`/`), unified **Scalar OpenAPI Docs** (`/docs`), **LLM/AEO & RFC 9116 discovery** (`/llms.txt`, `/llms-full.txt`, `/.well-known/security.txt`, `/robots.txt`, `/sitemap.xml`), and **Wolf-Mark icons + OpenGraph cards** |
 | **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs, 1-CTE refresh rotation, scoped `mk_live_*` API keys, **distributed Upstash Redis Lua + local fallback sliding-window rate limiter** (identity-keyed + IETF `RateLimit-*` headers), CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI, Eden Treaty |
 | **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/` & `private/`), **outer IP + post-JWT per-user cost-tiered sliding-window rate limiter**, HMAC-SHA256 private CDN signing, presigned direct PUTs, domain event bus, AST boundary enforcement |
 | **Links Service** | `/v1/links/*` | **Hasura GraphQL Engine** | Baked v3 metadata (`cli-migrations-v3`), JWT role/row permissions, `limit: 100` caps, production allow-list, single-query lateral-join compilation |
@@ -341,6 +341,16 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 ---
 
 ## API Endpoints
+
+### Portal, Interactive Docs, Discovery & Brand Assets (Gateway)
+| Method | Path | Auth | Description |
+| :--- | :--- | :--- | :--- |
+| `GET`/`HEAD` | `/` | Public | Content-negotiated: Live Console HTML portal + live `/health` telemetry + JSON-LD (`WebAPI`, `FAQPage`) for browsers; JSON service descriptor for API/CLI clients |
+| `GET` | `/docs` | Public | Unified multi-spec **Scalar OpenAPI 3.1** UI loading both Core API & Media API |
+| `GET` | `/llms.txt`, `/llms-full.txt` | Public | Concise and full LLM/AEO guides for AI crawlers & coding agents |
+| `GET` | `/.well-known/security.txt`, `/robots.txt`, `/sitemap.xml` | Public | RFC 9116 security policy, explicit AI crawler rules (`GPTBot`, `OAI-SearchBot`, `ClaudeBot`, `PerplexityBot`), XML sitemap |
+| `GET` | `/favicon.ico`, `/icon.svg`, `/apple-touch-icon.png` | Public | Live Console Wolf-Mark favicons & Apple Touch icon (`CORP: cross-origin`) |
+| `GET` | `/opengraph-image`, `/opengraph-image.png`, `/twitter-image`, `/twitter-image.png` | Public | 1200×630 Live Console OpenGraph & Twitter `summary_large_image` social preview cards (`CORP: cross-origin`) |
 
 ### Core Service (`/v1/core`)
 | Method | Path | Auth | Description |
