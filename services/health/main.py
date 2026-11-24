@@ -61,7 +61,6 @@ _NOT_FOUND_GET_CLOSE: Final[bytes] = _NOT_FOUND_HEAD_CLOSE + _NOT_FOUND_BODY
 class ServiceHealthResult(TypedDict):
     service: str
     status: Literal["healthy", "unhealthy"]
-    url: str
     latency_ms: float
     error: NotRequired[str]
 
@@ -171,13 +170,11 @@ class _UpstreamTarget:
                         return {
                             "service": self.name,
                             "status": "healthy",
-                            "url": self.url,
                             "latency_ms": latency_ms,
                         }
                     return {
                         "service": self.name,
                         "status": "unhealthy",
-                        "url": self.url,
                         "latency_ms": latency_ms,
                         "error": f"HTTP {status_code}",
                     }
@@ -191,7 +188,6 @@ class _UpstreamTarget:
                     return {
                         "service": self.name,
                         "status": "unhealthy",
-                        "url": self.url,
                         "latency_ms": latency_ms,
                         "error": _sanitize_probe_error(exc),
                     }
@@ -199,7 +195,6 @@ class _UpstreamTarget:
         return {
             "service": self.name,
             "status": "unhealthy",
-            "url": self.url,
             "latency_ms": latency_ms,
             "error": "probe failed",
         }

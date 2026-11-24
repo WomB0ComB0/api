@@ -2,81 +2,82 @@
 
 ## Architecture Overview
 
-\`api.mikeodnis.dev\` is the unified API gateway for the \`*.mikeodnis.dev\` platform by Mike Odnis.
-Traffic enters through a Caddy reverse proxy (\`services/gateway\`) enforcing security headers, zstd/gzip compression, and upstream routing to four internal services:
+`api.mikeodnis.dev` is the unified API gateway for the `*.mikeodnis.dev` platform by Mike Odnis.
+Traffic enters through a Caddy reverse proxy (`services/gateway`) enforcing security headers, zstd/gzip compression, fail-closed upstream routing, and private-mesh IP forwarding to four internal services:
 
-1. **Core Service (\`/v1/core/*\`)** — TypeScript, Bun, ElysiaJS, PostgreSQL, Upstash Redis.
-2. **Media Service (\`/v1/media/*\`)** — Go 1.24, Chi, hexagonal architecture, PostgreSQL, Cloudflare R2.
-3. **Links GraphQL (\`/v1/links/*\`)** — Hasura GraphQL Engine.
-4. **Health Aggregator (\`/health\`)** — Consolidated service health monitor.
+1. **Core Service (`/v1/core/*`)** — TypeScript, Bun, ElysiaJS, PostgreSQL, Upstash Redis.
+2. **Media Service (`/v1/media/*`)** — Go 1.26, Chi, hexagonal architecture, PostgreSQL, Cloudflare R2.
+3. **Links GraphQL (`/v1/links/graphql`, `/v1/links/v1/graphql`)** — Hasura GraphQL Engine (allow-listed, admin endpoints blocked at gateway).
+4. **Health Aggregator (`/health`)** — Consolidated service health monitor with 2-second coalesced probe caching.
 
 ## Authentication
 
 ### 1. HS256 JWT Bearer Tokens
-Issued by \`POST /v1/core/auth/login\` or \`POST /v1/core/auth/register\`:
-- Header: \`Authorization: Bearer <access_token>\`
-- Default access TTL: 15 minutes; rotating refresh tokens valid up to 30 days via \`POST /v1/core/auth/refresh\`.
-- Includes \`https://hasura.io/jwt/claims\` (\`x-hasura-user-id\`, \`x-hasura-default-role\`, \`x-hasura-allowed-roles\`) for seamless GraphQL + Media service authentication.
+Issued by `POST /v1/core/auth/login` or `POST /v1/core/auth/register`:
+- Header: `Authorization: Bearer <access_token>`
+- Default access TTL: 15 minutes (`exp` claim required); rotating refresh tokens valid up to 30 days via `POST /v1/core/auth/refresh`.
+- Includes `https://hasura.io/jwt/claims` (`x-hasura-user-id`, `x-hasura-default-role`, `x-hasura-allowed-roles`) for seamless GraphQL + Media service authentication.
 
-### 2. Scoped API Keys (\`mk_live_*\`)
-Created via \`POST /v1/core/auth/api-keys\` with scopes (\`read\`, \`write\`, \`media\`, \`links\`):
-- Header: \`X-API-Key: mk_live_...\`
+### 2. Scoped API Keys (`mk_live_*`)
+Created via `POST /v1/core/auth/api-keys` (Bearer JWT required) with up to 4 unique scopes (`read`, `write`, `media`, `links`):
+- Header: `X-API-Key: mk_live_...` (or `Authorization: Bearer mk_live_...`)
 - Keys are SHA-256 hashed at rest; the raw key is returned once on creation.
+- Scoped API keys require the `read` scope for `GET /v1/core/auth/me` and `GET /v1/core/users/{id}`, and cannot manage API keys, mutate/delete accounts, or access admin routes (Bearer JWT required).
 
 ## Endpoints
 
-### Core API (\`/v1/core\`)
-- \`GET /v1/core/health\` — Liveness probe
-- \`GET /v1/core/health/ready\` — PostgreSQL readiness probe
-- \`GET /v1/core/status\` — Runtime uptime, memory RSS, and distributed Redis rate-limiter telemetry
-- \`GET /v1/core/version\`, \`GET /v1/core/info\` — Build metadata and companion URLs
-- \`GET /v1/core/openapi.json\`, \`GET /v1/core/docs\` — OpenAPI 3.1 schema and Scalar UI
-- \`POST /v1/core/auth/register\` — Create account (\`email\`, \`name\`, \`password\` >= 10 chars)
-- \`POST /v1/core/auth/login\` — Sign in -> \`{ user, access_token, refresh_token, token_type, expires_in }\`
-- \`POST /v1/core/auth/refresh\` — Atomic single-use refresh token rotation
-- \`POST /v1/core/auth/logout\` — Revoke refresh token
-- \`GET /v1/core/auth/me\` — Authenticated user profile
-- \`POST /v1/core/auth/api-keys\`, \`GET /v1/core/auth/api-keys\`, \`DELETE /v1/core/auth/api-keys/{id}\`
-- \`GET /v1/core/users\`, \`GET /v1/core/users/{id}\`, \`PATCH /v1/core/users/{id}\`, \`DELETE /v1/core/users/{id}\`
+### Core API (`/v1/core`)
+- `GET /v1/core/health` — Liveness probe
+- `GET /v1/core/health/ready` — PostgreSQL readiness probe (2s coalesced cache)
+- `GET /v1/core/status` — Runtime uptime, memory RSS, and distributed Redis rate-limiter telemetry (`no-store`)
+- `GET /v1/core/version`, `GET /v1/core/info` — Build metadata and companion URLs
+- `GET /v1/core/openapi.json`, `GET /v1/core/docs` — OpenAPI 3.1 schema and Scalar UI
+- `POST /v1/core/auth/register` — Create account (`email`, `name`, `password` >= 10 chars)
+- `POST /v1/core/auth/login` — Sign in -> `{ user, access_token, refresh_token, token_type, expires_in }`
+- `POST /v1/core/auth/refresh` — Atomic single-use refresh token rotation
+- `POST /v1/core/auth/logout` — Revoke refresh token
+- `GET /v1/core/auth/me` — Authenticated user profile (JWT or `read`-scoped API key)
+- `POST /v1/core/auth/api-keys`, `GET /v1/core/auth/api-keys`, `DELETE /v1/core/auth/api-keys/{id}` (Bearer JWT required)
+- `GET /v1/core/users` (admin JWT), `GET /v1/core/users/{id}` (self/admin JWT or self `read` API key), `PATCH /v1/core/users/{id}` (JWT), `DELETE /v1/core/users/{id}` (JWT)
 
-### Media API (\`/v1/media\`)
-- \`GET /v1/media/health\`, \`GET /v1/media/health/ready\`, \`GET /v1/media/openapi.json\`
-- \`POST /v1/media/upload\` — Multipart upload (\`file\`, \`visibility=public|private\`), max 100 MiB -> returns \`{ id, filename, key, url, visibility, size, mime_type, etag, sha256, created_at }\`
-- \`POST /v1/media/presign\` — Generate direct-to-R2 presigned PUT URL (\`{ filename, content_type, visibility }\`)
-- \`POST /v1/media/assets/confirm\` — Confirm presigned upload (\`{ key, filename, metadata }\`)
-- \`GET /v1/media/assets?limit=50&offset=0\` — Paginated list of authenticated user's assets
-- \`GET /v1/media/assets/{id}\`, \`DELETE /v1/media/assets/{id}\`
-- \`POST /v1/media/sign\` — Mint HMAC-SHA256 signed URL for \`cdn.mikeodnis.dev/private/*\` (\`{ asset_id, expires_in }\`)
-- \`POST /v1/media/purge\` — Purge Cloudflare edge cache for asset URLs (\`{ files: [...] }\`)
+### Media API (`/v1/media`)
+- `GET /v1/media/health`, `GET /v1/media/health/ready` (2s coalesced cache), `GET /v1/media/openapi.json`
+- `POST /v1/media/upload` — Multipart upload (`file`, `visibility=public|private`), max 100 MiB (SVG 2 MiB), magic-byte + SVG active-content verified -> returns `{ id, filename, key, url, visibility, size, mime_type, etag, sha256, created_at }`
+- `POST /v1/media/presign` — Generate direct-to-R2 presigned PUT URL targeting non-servable `staging/*` prefix (`{ filename, content_type, visibility }`)
+- `POST /v1/media/assets/confirm` — Verify ETag-pinned staged object and atomically promote to live prefix (`{ key, filename, metadata }`)
+- `GET /v1/media/assets?limit=50&offset=0` — Paginated list of authenticated user's assets (`offset <= 10000`)
+- `GET /v1/media/assets/{id}`, `DELETE /v1/media/assets/{id}`
+- `POST /v1/media/sign` — Mint HMAC-SHA256 signed URL for `cdn.mikeodnis.dev/private/*` (`{ asset_id | key, expires_in }`)
+- `POST /v1/media/purge` — Purge Cloudflare edge cache for asset URLs (`{ files: [...] }`)
 
 ## Rate Limiting (IETF Draft Headers)
 
-All rate-limited responses emit \`RateLimit-Limit\`, \`RateLimit-Remaining\`, \`RateLimit-Reset\`, \`RateLimit-Policy\`, and \`Retry-After\` on \`429 Too Many Requests\`.
+All rate-limited responses emit `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, `RateLimit-Policy`, and `Retry-After` on `429 Too Many Requests`.
 
 | Service | Tier | Limit | Keying |
 |---|---|---|---|
-| Core | \`auth\` (login/register/refresh) | 10 req / 60s | Client IP |
-| Core | \`auth-keys\` (API key mutations) | 15 req / 60s | User / API key / IP |
-| Core | \`write\` (POST/PUT/PATCH/DELETE) | 30 req / 60s | User / API key / IP |
-| Core | \`read\` (GET/HEAD) | 100 req / 60s | User / API key / IP |
-| Media | \`media-ip\` (outer ceiling) | 120 req / 60s | Client IP |
-| Media | \`media-write\` (upload/presign/purge) | 20 req / 60s | Authenticated User ID |
-| Media | \`media-read\` (list/get/sign/delete) | 100 req / 60s | Authenticated User ID |
+| Core | `auth` (login/register/refresh/logout) | 10 req / 60s | Trusted Client IP |
+| Core | `auth-keys` (API key management) | 20 req / 60s | Verified JWT User / Trusted Client IP |
+| Core | `write` (POST/PUT/PATCH/DELETE) | 30 req / 60s | Verified JWT User / Dual IP + API key / IP |
+| Core | `read` (GET/HEAD) | 100 req / 60s | Verified JWT User / Dual IP + API key / IP |
+| Media | `media-ip` (outer ceiling) | 120 req / 60s | Trusted Client IP |
+| Media | `media-write` (upload/presign/confirm/purge/delete) | 20 req / 60s | Authenticated User ID |
+| Media | `media-read` (list/get/sign) | 100 req / 60s | Authenticated User ID |
 
 ## Working Examples
 
-\`\`\`bash
+```bash
 # 1. Inspect live gateway & Redis rate-limiter health
 curl -sS https://api.mikeodnis.dev/v1/core/status
 
 # 2. Authenticate and capture Bearer JWT
-JWT=$(curl -sS -X POST https://api.mikeodnis.dev/v1/core/auth/login \\
-  -H 'Content-Type: application/json' \\
+JWT=$(curl -sS -X POST https://api.mikeodnis.dev/v1/core/auth/login \
+  -H 'Content-Type: application/json' \
   -d '{"email":"you@mikeodnis.dev","password":"your-password"}' | jq -r .access_token)
 
 # 3. Upload a file to Cloudflare R2 and receive its cdn.mikeodnis.dev URL
-curl -sS -X POST https://api.mikeodnis.dev/v1/media/upload \\
-  -H "Authorization: Bearer $JWT" \\
-  -F "file=@./image.png" \\
+curl -sS -X POST https://api.mikeodnis.dev/v1/media/upload \
+  -H "Authorization: Bearer $JWT" \
+  -F "file=@./image.png" \
   -F "visibility=public"
-\`\`\`
+```

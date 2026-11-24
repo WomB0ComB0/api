@@ -139,6 +139,8 @@ class HealthAggregatorTests(unittest.TestCase):
                 self.assertEqual(resp.headers.get("Connection"), "close")
                 data = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(data["status"], "healthy")
+                # Internal upstream URLs must never be exposed in public /health responses
+                self.assertNotIn("url", data["services"][0])
 
             # Unreachable port returns sanitized error category (never raw Errno / internal details)
             code, err_body = check_all_services({"down": "http://127.0.0.1:1/health"}, timeout=0.5)
