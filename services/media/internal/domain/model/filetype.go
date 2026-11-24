@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -69,7 +70,7 @@ var extToCanonicalTextMIME = map[string]string{
 
 var (
 	svgOpeningRe = regexp.MustCompile(`(?is)^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!DOCTYPE\s+svg[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg\b`)
-	svgActiveRe  = regexp.MustCompile(`(?i)<\s*(?:script|foreignobject|iframe|object|embed|applet|meta)\b|<!\s*entity\b|\bon[a-z]{2,32}\s*=|(?:javascript|vbscript)\s*:|data\s*:\s*text/html`)
+	svgActiveRe  = regexp.MustCompile(`(?i)<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|animate|animatemotion|animatetransform|set|handler)\b|<!\s*entity\b|<!\s*doctype\s+[^>]+\[|\bon[a-z]{2,32}\s*=|(?:javascript|vbscript)\s*:|data\s*:\s*(?:text/html|image/svg\+xml)|<\s*use\b[^>]*\b(?:xlink:)?href\s*=\s*["']?\s*(?:https?:|//|data:)|@import\b|expression\s*\(`)
 	htmlPrefixRe = regexp.MustCompile(`(?i)^\s*(?:<!doctype\s+html|<html\b|<script\b|<iframe\b|<\?php\b)`)
 )
 
@@ -126,14 +127,21 @@ func DetectFileSignature(head []byte) (FileType, bool) {
 	}
 
 	// Text/SVG classification: require valid UTF-8 with no non-whitespace control bytes.
+	wasTruncated := len(head) > 512
 	sample := head
-	if len(sample) > 512 {
+	if wasTruncated {
 		sample = sample[:512]
 	}
 	sample = bytes.TrimPrefix(sample, []byte{0xEF, 0xBB, 0xBF}) // Strip optional UTF-8 BOM
-	// Avoid false UTF-8 failure if a multi-byte rune was truncated at the 512-byte boundary
-	for len(sample) > 0 && !utf8.Valid(sample) && len(sample) > len(head)-4 {
-		sample = sample[:len(sample)-1]
+	// Avoid false UTF-8 failure ONLY when a multi-byte rune was split at the 512-byte sniff cap.
+	if wasTruncated {
+		minLen := len(sample) - 3
+		if minLen < 0 {
+			minLen = 0
+		}
+		for len(sample) > minLen && !utf8.Valid(sample) {
+			sample = sample[:len(sample)-1]
+		}
 	}
 	if len(sample) == 0 || !utf8.Valid(sample) {
 		return "", false
@@ -204,13 +212,18 @@ func ValidateUploadContent(filename Filename, declaredContentType string, head [
 	return spec.canonicalMIME, nil
 }
 
-// ValidateSVGContent blocks active XSS/XXE constructs in uploaded SVG documents.
+// ValidateSVGContent blocks active XSS/XXE/SSRF constructs in uploaded SVG documents,
+// checking both raw markup and HTML/XML-entity-decoded markup to stop numeric entity evasion.
 func ValidateSVGContent(data []byte) error {
 	if !utf8.Valid(data) {
 		return apperr.Validation("SVG file must be valid UTF-8")
 	}
 	if svgActiveRe.Match(data) {
-		return apperr.Validation("SVG contains disallowed active content (scripts, event handlers, foreignObject, or XML entities)")
+		return apperr.Validation("SVG contains disallowed active content (scripts, event handlers, animation triggers, external use, or XML entities)")
+	}
+	decoded := html.UnescapeString(string(data))
+	if svgActiveRe.MatchString(decoded) {
+		return apperr.Validation("SVG contains disallowed active content after entity decoding")
 	}
 	return nil
 }

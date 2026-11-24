@@ -310,4 +310,28 @@ func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
 	if _, exists := store.objects[pre.Key]; exists {
 		t.Fatalf("oversized presigned object must be purged from R2 on failed confirm")
 	}
+
+	// 4. Presign confirm with mismatched filename extension vs key extension must reject
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key, // ends in .png
+		Filename: "spoofed.txt",
+	}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected key-extension mismatch rejection, got %v", err)
+	}
+
+	// 5. PurgeCache must reject percent-encoded traversal targeting another user's assets
+	purger := &noopPurger{}
+	purgeFactory := application.NewFactory(store, repo, nil, purger, nil, "https://cdn.mikeodnis.dev", 1024)
+	if _, err := purgeFactory.PurgeCache().Execute(context.Background(), media.PurgeCacheInput{
+		Actor: u1,
+		Files: []string{"https://cdn.mikeodnis.dev/assets/" + u1.UserID + "/%2e%2e/other-user/secret.png"},
+	}); err == nil {
+		t.Fatalf("expected percent-encoded purge traversal to be rejected")
+	}
 }
+
+type noopPurger struct{}
+
+func (*noopPurger) Configured() bool                             { return true }
+func (*noopPurger) PurgeURLs(context.Context, []string) error    { return nil }

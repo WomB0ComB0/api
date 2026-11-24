@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"testing"
 
 	"api/media/internal/domain/event"
@@ -98,17 +99,38 @@ func TestFilenameAndUploadTypeSafety(t *testing.T) {
 		t.Fatalf("expected canonical image/png, got ct=%q err=%v", ct, err)
 	}
 
-	// SVG XSS / XXE rejection vs clean SVG acceptance
+	// SVG XSS / XXE / entity-evasion / animation / external-<use> rejection vs clean SVG acceptance
 	svgFn, _ := ParseFilename("icon.svg")
 	for _, badSVG := range []string{
 		`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`,
 		`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><circle r="5"/></svg>`,
 		`<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><body></body></foreignObject></svg>`,
 		`<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>`,
+		`<svg xmlns="http://www.w3.org/2000/svg"><a href="&#x6a;avascript:alert(1)"><rect width="10" height="10"/></a></svg>`,
+		`<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="href" to="javascript:alert(1)"/></svg>`,
+		`<svg xmlns="http://www.w3.org/2000/svg"><use href="https://evil.example/payload.svg#x"/></svg>`,
+		`<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://evil.example/x.css);</style></svg>`,
 	} {
 		if _, err := ValidateUploadContent(svgFn, "image/svg+xml", []byte(badSVG)); !apperr.IsType(err, apperr.TypeValidation) {
 			t.Fatalf("expected malicious SVG rejection for %q, got %v", badSVG, err)
 		}
+	}
+
+	// UTF-8 multi-byte rune split across 512-byte sniff boundary must still classify as text
+	txtFn, _ := ParseFilename("notes.txt")
+	longUTF8 := append([]byte(string(make([]byte, 0))), bytes.Repeat([]byte("a"), 510)...)
+	longUTF8 = append(longUTF8, []byte("🚀 trailing text")...)
+	if ct, err := ValidateUploadContent(txtFn, "text/plain", longUTF8); err != nil || ct != "text/plain; charset=utf-8" {
+		t.Fatalf("expected valid UTF-8 text split across 512B boundary, got ct=%q err=%v", ct, err)
+	}
+
+	// Metadata bounds & prototype-pollution key rejection
+	if err := ValidateMetadata(map[string]any{"__proto__": map[string]any{"admin": true}}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected prototype pollution metadata rejection, got %v", err)
+	}
+	deep := map[string]any{"a": map[string]any{"b": map[string]any{"c": map[string]any{"d": map[string]any{"e": "too-deep"}}}}}
+	if err := ValidateMetadata(deep); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected deep metadata rejection, got %v", err)
 	}
 	cleanSVG := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>`
 	if ct, err := ValidateUploadContent(svgFn, "image/svg+xml", []byte(cleanSVG)); err != nil || ct != "image/svg+xml" {

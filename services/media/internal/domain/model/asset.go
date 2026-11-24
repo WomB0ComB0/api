@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,68 @@ type Asset struct {
 	events []event.Event
 }
 
+const (
+	maxMetadataBytes = 16 << 10 // 16 KiB serialized ceiling
+	maxMetadataKeys  = 32
+	maxMetadataDepth = 4
+)
+
+// ValidateMetadata enforces size, key count, nesting depth, prototype-pollution key blocks,
+// and control/bidi hygiene on client-supplied JSON metadata before persisting to Postgres jsonb.
+func ValidateMetadata(meta map[string]any) error {
+	if len(meta) == 0 {
+		return nil
+	}
+	if len(meta) > maxMetadataKeys {
+		return apperr.Validation(fmt.Sprintf("metadata may not exceed %d top-level keys", maxMetadataKeys))
+	}
+	if err := validateMetadataValue(meta, 0); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return apperr.Validation("metadata must be valid JSON")
+	}
+	if len(raw) > maxMetadataBytes {
+		return apperr.Validation("metadata exceeds 16 KiB limit")
+	}
+	return nil
+}
+
+func validateMetadataValue(v any, depth int) error {
+	if depth > maxMetadataDepth {
+		return apperr.Validation("metadata nesting depth exceeds limit")
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		if len(x) > maxMetadataKeys {
+			return apperr.Validation("metadata object has too many keys")
+		}
+		for k, val := range x {
+			if k == "" || len(k) > 128 || containsUnsafeFilenameRune(k) {
+				return apperr.Validation("metadata contains invalid key")
+			}
+			switch strings.ToLower(k) {
+			case "__proto__", "constructor", "prototype":
+				return apperr.Validation("metadata contains disallowed key")
+			}
+			if err := validateMetadataValue(val, depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		if len(x) > 64 {
+			return apperr.Validation("metadata array exceeds 64 elements")
+		}
+		for _, item := range x {
+			if err := validateMetadataValue(item, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func NewAsset(
 	userID string,
 	filename Filename,
@@ -156,6 +219,8 @@ func NewAsset(
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
+	} else if err := ValidateMetadata(metadata); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()

@@ -110,7 +110,7 @@ func NewRouter(factory *application.Factory, cfg *config.Config) http.Handler {
 				func(r *http.Request) *middleware.RateLimitPolicy {
 					if r.Method == http.MethodPost {
 						switch r.URL.Path {
-						case "/v1/media/upload", "/v1/media/presign", "/v1/media/purge":
+						case "/v1/media/upload", "/v1/media/presign", "/v1/media/assets/confirm", "/v1/media/purge":
 							return &userWritePolicy
 						}
 					}

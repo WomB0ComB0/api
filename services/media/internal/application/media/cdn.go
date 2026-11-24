@@ -3,6 +3,8 @@ package media
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -104,25 +106,37 @@ func (uc *PurgeCacheUseCase) Execute(ctx context.Context, in PurgeCacheInput) (*
 		return nil, apperr.Validation("files must contain between 1 and 30 URLs")
 	}
 
-	cdnBase := uc.cdnBaseURL + "/"
-	allowedPublic := fmt.Sprintf("%sassets/%s/", cdnBase, in.Actor.UserID)
-	allowedPrivate := fmt.Sprintf("%sprivate/%s/", cdnBase, in.Actor.UserID)
-
-	for _, f := range in.Files {
-		if !strings.HasPrefix(f, cdnBase) || strings.Contains(f, "..") {
-			return nil, apperr.Validation("all purge URLs must belong to the configured CDN domain")
-		}
-		if in.Actor.Role != "admin" && !strings.HasPrefix(f, allowedPublic) && !strings.HasPrefix(f, allowedPrivate) {
-			return nil, apperr.Forbidden("forbidden to purge assets owned by another user")
-		}
+	baseParsed, err := url.Parse(uc.cdnBaseURL)
+	if err != nil || baseParsed.Host == "" {
+		return nil, apperr.System("invalid CDN base URL configuration", err)
 	}
 
-	if err := uc.purger.PurgeURLs(ctx, in.Files); err != nil {
+	sanitizedFiles := make([]string, 0, len(in.Files))
+	for _, f := range in.Files {
+		u, parseErr := url.Parse(strings.TrimSpace(f))
+		if parseErr != nil || u.Scheme != baseParsed.Scheme || !strings.EqualFold(u.Host, baseParsed.Host) || u.User != nil {
+			return nil, apperr.Validation("all purge URLs must belong to the configured CDN domain")
+		}
+		if strings.Contains(u.RawPath, "%2e") || strings.Contains(u.RawPath, "%2E") || strings.Contains(u.Path, "..") || strings.Contains(u.Path, `\`) {
+			return nil, apperr.Validation("purge URL contains disallowed path traversal")
+		}
+		cleanKey := strings.TrimPrefix(path.Clean("/"+u.Path), "/")
+		if in.Actor.Role != "admin" {
+			if _, ownErr := model.ValidateOwnedKey(cleanKey, in.Actor.UserID); ownErr != nil {
+				return nil, apperr.Forbidden("forbidden to purge assets owned by another user")
+			}
+		} else if !strings.HasPrefix(cleanKey, "assets/") && !strings.HasPrefix(cleanKey, "private/") {
+			return nil, apperr.Validation("purge URL must target an asset key")
+		}
+		sanitizedFiles = append(sanitizedFiles, fmt.Sprintf("%s/%s", uc.cdnBaseURL, cleanKey))
+	}
+
+	if err := uc.purger.PurgeURLs(ctx, sanitizedFiles); err != nil {
 		return nil, apperr.External("failed to purge CDN cache", err)
 	}
 
 	return &PurgeCacheOutput{
 		Status: "purged",
-		Count:  len(in.Files),
+		Count:  len(sanitizedFiles),
 	}, nil
 }

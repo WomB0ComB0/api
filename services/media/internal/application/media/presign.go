@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -104,6 +105,12 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 	cleanKey := strings.TrimLeft(strings.TrimSpace(in.Key), "/")
 	visibility, err := model.ValidateOwnedKey(cleanKey, in.Actor.UserID)
 	if err != nil {
+		return nil, err
+	}
+	if strings.ToLower(filepath.Ext(cleanKey)) != filename.Ext {
+		return nil, apperr.Validation("confirmed filename extension does not match object key extension")
+	}
+	if err := model.ValidateMetadata(in.Metadata); err != nil {
 		return nil, err
 	}
 
