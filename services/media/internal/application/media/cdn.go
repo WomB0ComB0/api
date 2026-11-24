@@ -61,9 +61,15 @@ func (uc *SignURLUseCase) Execute(ctx context.Context, in SignURLInput) (*SignUR
 		if !asset.CanAccess(in.Actor.UserID, in.Actor.Role) {
 			return nil, apperr.Forbidden("Forbidden")
 		}
+		if asset.Visibility != model.VisibilityPrivate {
+			return nil, apperr.Validation("only private assets require signed URLs")
+		}
 		key = asset.R2Key
 	case in.Key != "":
 		key = strings.TrimLeft(strings.TrimSpace(in.Key), "/")
+		if !strings.HasPrefix(key, "private/") {
+			return nil, apperr.Validation("only private/* keys can be signed")
+		}
 		if in.Actor.Role != "admin" {
 			if _, err := model.ValidateOwnedKey(key, in.Actor.UserID); err != nil {
 				return nil, err

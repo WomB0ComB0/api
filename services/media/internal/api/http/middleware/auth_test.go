@@ -56,4 +56,33 @@ func TestJWTAuthMiddleware(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for bad signature, got %d", rec.Code)
 	}
+
+	// Token without exp claim must be rejected (WithExpirationRequired)
+	noExp := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":  "user-123",
+		"role": "user",
+	})
+	noExpSigned, _ := noExp.SignedString([]byte(secret))
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+noExpSigned)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for token missing exp, got %d", rec.Code)
+	}
+
+	// Token with path traversal in sub claim must be rejected
+	badSub := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":  "../other-user",
+		"role": "user",
+		"exp":  time.Now().Add(time.Hour).Unix(),
+	})
+	badSubSigned, _ := badSub.SignedString([]byte(secret))
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+badSubSigned)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for traversal sub claim, got %d", rec.Code)
+	}
 }

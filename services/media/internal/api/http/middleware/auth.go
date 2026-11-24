@@ -16,9 +16,26 @@ const (
 	userRoleKey contextKey = "userRole"
 )
 
+func isSafeUserID(s string) bool {
+	if s == "" || len(s) > 128 || strings.Contains(s, "..") || strings.ContainsAny(s, `/\`) {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7F || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
+			return false
+		}
+	}
+	return true
+}
+
 func JWTAuth(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.TrimSpace(secret) == "" {
+				writeAuthError(w, "Authentication not configured")
+				return
+			}
+
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				writeAuthError(w, "Authorization header required")
@@ -31,12 +48,17 @@ func JWTAuth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			token, err := jwt.Parse(bearerToken[1], func(token *jwt.Token) (any, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, jwt.ErrSignatureInvalid
-				}
-				return []byte(secret), nil
-			}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+			token, err := jwt.Parse(
+				bearerToken[1],
+				func(token *jwt.Token) (any, error) {
+					if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+						return nil, jwt.ErrSignatureInvalid
+					}
+					return []byte(secret), nil
+				},
+				jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+				jwt.WithExpirationRequired(),
+			)
 
 			if err != nil || !token.Valid {
 				writeAuthError(w, "Invalid or expired token")
@@ -50,14 +72,15 @@ func JWTAuth(secret string) func(http.Handler) http.Handler {
 			}
 
 			userID, ok := claims["sub"].(string)
-			if !ok || strings.TrimSpace(userID) == "" {
-				writeAuthError(w, "User ID not found in token")
+			userID = strings.TrimSpace(userID)
+			if !ok || !isSafeUserID(userID) {
+				writeAuthError(w, "Invalid user ID in token")
 				return
 			}
 
-			role, _ := claims["role"].(string)
-			if role == "" {
-				role = "user"
+			role := "user"
+			if rawRole, ok := claims["role"].(string); ok && rawRole == "admin" {
+				role = "admin"
 			}
 
 			ctx := WithUser(r.Context(), userID, role)

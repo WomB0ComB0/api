@@ -61,6 +61,7 @@ func (r *AssetRepository) Save(ctx context.Context, asset *model.Asset) (*model.
 			sha256 = EXCLUDED.sha256,
 			metadata = EXCLUDED.metadata,
 			updated_at = NOW()
+		WHERE media.assets.user_id = EXCLUDED.user_id
 		RETURNING id::text, user_id::text, filename, mime_type, size_bytes, r2_key, public_url, visibility, COALESCE(etag, ''), COALESCE(sha256, ''), metadata, created_at, updated_at
 	`
 
