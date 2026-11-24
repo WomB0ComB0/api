@@ -22,7 +22,11 @@ func writeJSON[T any](w http.ResponseWriter, status int, payload T) {
 		http.Error(w, `{"error":"encoding error"}`, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }

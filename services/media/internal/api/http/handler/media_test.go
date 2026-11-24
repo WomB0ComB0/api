@@ -306,4 +306,16 @@ func TestHTTPPresignAndConfirm(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
+	if rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("expected no-store + nosniff on media JSON response, got cc=%q xcto=%q", rec.Header().Get("Cache-Control"), rec.Header().Get("X-Content-Type-Options"))
+	}
+
+	// Unknown JSON fields and trailing JSON smuggling must be rejected with 400
+	req = httptest.NewRequest(http.MethodPost, "/v1/media/presign", strings.NewReader(`{"filename":"banner.webp","content_type":"image/webp","user_id":"other"}`))
+	req = req.WithContext(middleware.WithUser(req.Context(), user1, "user"))
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown JSON field, got %d", rec.Code)
+	}
 }

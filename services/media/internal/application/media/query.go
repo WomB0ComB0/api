@@ -86,6 +86,9 @@ func (uc *ListAssetsUseCase) Execute(ctx context.Context, in ListAssetsInput) (*
 	if offset < 0 {
 		offset = 0
 	}
+	if offset > 10_000 {
+		return nil, apperr.Validation("offset must not exceed 10000")
+	}
 
 	if uc.repo != nil {
 		assets, total, err := uc.repo.ListByUser(ctx, in.Actor.UserID, limit, offset)

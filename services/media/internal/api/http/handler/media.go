@@ -202,8 +202,14 @@ func (h *MediaHandler) DeleteAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeJSONBody(r *http.Request, dst any) error {
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(dst); err != nil {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
 		return apperr.Validation("invalid JSON payload")
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return apperr.Validation("unexpected trailing data in JSON payload")
 	}
 	return nil
 }

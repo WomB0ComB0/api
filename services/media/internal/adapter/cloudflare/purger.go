@@ -76,6 +76,7 @@ func (p *CachePurger) PurgeURLs(ctx context.Context, urls []string) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("cloudflare purge error (HTTP %d): %s", resp.StatusCode, string(body))
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
 
