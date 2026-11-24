@@ -519,6 +519,18 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     });
     expect(keyRevokeViaKey.status).toBe(403);
 
+    // Scoped API keys must NEVER mutate or delete the user's account
+    const patchUserViaKey = await api.v1.core.users({ id: u1.user.id }).patch(
+      { name: 'Hijacked' },
+      { headers: { 'x-api-key': rawKey } }
+    );
+    expect(patchUserViaKey.status).toBe(403);
+
+    const deleteUserViaKey = await api.v1.core.users({ id: u1.user.id }).delete(undefined, {
+      headers: { 'x-api-key': rawKey },
+    });
+    expect(deleteUserViaKey.status).toBe(403);
+
     const revokeRes = await api.v1.core.auth['api-keys']({ id: keyId }).delete(undefined, {
       headers: { authorization: `Bearer ${u1.access_token}` },
     });

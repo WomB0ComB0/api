@@ -96,6 +96,18 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     const body = (await r3.json()) as { error: string; policy: string };
     expect(body.policy).toBe('auth');
 
+    // Spoofed random X-API-Key header MUST NOT bypass auth brute-force rate limit!
+    const spoofedBypass = await app.handle(
+      new Request('http://localhost/v1/core/auth/login', {
+        method: 'POST',
+        headers: {
+          'cf-connecting-ip': '198.51.100.5',
+          'x-api-key': 'mk_live_random_spoofed_bypass_attempt_999',
+        },
+      })
+    );
+    expect(spoofedBypass.status).toBe(429);
+
     // Health endpoint stays exempt even when client is rate-limited
     const health = await app.handle(
       new Request('http://localhost/v1/core/health', {
@@ -105,10 +117,10 @@ describe('Core Distributed Rate Limiter Plugin', () => {
     expect(health.status).toBe(200);
 
     const snap = metrics.snapshot();
-    expect(snap.evaluated).toBe(3);
+    expect(snap.evaluated).toBe(4);
     expect(snap.allowed).toBe(2);
-    expect(snap.limited_429).toBe(1);
-    expect(snap.limited_by_policy['auth']).toBe(1);
+    expect(snap.limited_429).toBe(2);
+    expect(snap.limited_by_policy['auth']).toBe(2);
   });
 
   test('trips circuit breaker on distributed store failures and enforces strict local fallback', async () => {

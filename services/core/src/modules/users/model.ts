@@ -9,7 +9,7 @@ export const UsersModel = {
   }),
   listQuery: t.Object({
     limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100 })),
-    offset: t.Optional(t.Numeric({ minimum: 0 })),
+    offset: t.Optional(t.Numeric({ minimum: 0, maximum: 10000 })),
   }),
   listResponse: t.Object({
     users: t.Array(UserProfileSchema),

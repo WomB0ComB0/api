@@ -31,7 +31,8 @@ export function createUsersModule(db: Database, config: AppConfig) {
     .get(
       '/:id',
       async ({ authUser, params }) => {
-        if (authUser.role !== 'admin' && authUser.id !== params.id) {
+        const isAdminJwt = authUser.authType === 'jwt' && authUser.role === 'admin';
+        if (!isAdminJwt && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });
         }
         const user = await service.getById(params.id);
@@ -51,13 +52,16 @@ export function createUsersModule(db: Database, config: AppConfig) {
         },
         detail: {
           tags: ['users'],
-          summary: 'Get user by ID (self or admin)',
+          summary: 'Get user by ID (self or admin JWT)',
         },
       }
     )
     .patch(
       '/:id',
       async ({ authUser, params, body }) => {
+        if (authUser.authType !== 'jwt') {
+          return status(403, { error: 'API keys cannot modify user accounts; authenticate with a Bearer JWT' });
+        }
         if (authUser.role !== 'admin' && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });
         }
@@ -83,13 +87,16 @@ export function createUsersModule(db: Database, config: AppConfig) {
         },
         detail: {
           tags: ['users'],
-          summary: 'Update user profile (self or admin)',
+          summary: 'Update user profile (self or admin JWT)',
         },
       }
     )
     .delete(
       '/:id',
       async ({ authUser, params }) => {
+        if (authUser.authType !== 'jwt') {
+          return status(403, { error: 'API keys cannot delete user accounts; authenticate with a Bearer JWT' });
+        }
         if (authUser.role !== 'admin' && authUser.id !== params.id) {
           return status(403, { error: 'Forbidden' });
         }
@@ -110,7 +117,7 @@ export function createUsersModule(db: Database, config: AppConfig) {
         },
         detail: {
           tags: ['users'],
-          summary: 'Delete user account (self or admin)',
+          summary: 'Delete user account (self or admin JWT)',
         },
       }
     );

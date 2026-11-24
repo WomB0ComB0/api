@@ -284,7 +284,8 @@ export function classifyCorePolicy(
   if (
     pathname === '/v1/core/auth/login' ||
     pathname === '/v1/core/auth/register' ||
-    pathname === '/v1/core/auth/refresh'
+    pathname === '/v1/core/auth/refresh' ||
+    pathname === '/v1/core/auth/logout'
   ) {
     return {
       name: 'auth',
@@ -336,11 +337,16 @@ function extractJwtSubVerified(token: string, secret: string, nowSec: number): s
       return null;
     }
 
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')) as { alg?: unknown };
+    if (header.alg !== 'HS256') {
+      return null;
+    }
+
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
       sub?: unknown;
       exp?: unknown;
     };
-    if (typeof payload.exp === 'number' && payload.exp <= nowSec) {
+    if (typeof payload.exp !== 'number' || payload.exp <= nowSec) {
       return null;
     }
     return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null;
@@ -374,12 +380,22 @@ export function extractTrustedClientIp(request: Request): string {
 export function resolveRateLimitIdentity(
   request: Request,
   jwtSecret?: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  policyName?: CoreRateLimitPolicyName
 ): string {
+  // Public auth endpoints (/login, /register, /refresh, /logout) MUST always be keyed by IP so an
+  // unauthenticated attacker cannot bypass brute-force rate limits by sending random X-API-Key headers.
+  if (policyName === 'auth') {
+    return `ip:${extractTrustedClientIp(request)}`;
+  }
+
   const apiKey = request.headers.get('x-api-key');
-  if (isNonEmptyString(apiKey) && apiKey.trim().length >= 8) {
-    const hash = createHash('sha256').update(apiKey.trim()).digest('hex').slice(0, 16);
-    return `apikey:${hash}`;
+  if (isNonEmptyString(apiKey)) {
+    const trimmed = apiKey.trim();
+    if (trimmed.startsWith('mk_live_') && trimmed.length >= 24) {
+      const hash = createHash('sha256').update(trimmed).digest('hex').slice(0, 16);
+      return `apikey:${hash}`;
+    }
   }
 
   const auth = request.headers.get('authorization');
@@ -420,7 +436,7 @@ export function createRateLimitPlugin(options: RateLimitOptions) {
 
     const nowMs = nowFn();
     const perfStart = performance.now();
-    const identity = resolveRateLimitIdentity(request, options.jwtSecret, nowMs);
+    const identity = resolveRateLimitIdentity(request, options.jwtSecret, nowMs, policy.name);
     const key = `${policy.name}:${identity}`;
     const windowSeconds = Math.max(1, Math.round(policy.windowMs / 1000));
 
