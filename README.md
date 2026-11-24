@@ -1,12 +1,16 @@
 # API Infrastructure — `api.mikeodnis.dev`
 
-Production polyglot API platform hosted end-to-end on **Railway (US East)** alongside the Hexagonal Edge CDN [`WomB0ComB0/cdn`](https://github.com/WomB0ComB0/cdn) (**Cloudflare Workers + R2**), with native **Axiom OpenTelemetry** distributed tracing and automated CI/CD.
+[![CI/CD](https://img.shields.io/github/actions/workflow/status/WomB0ComB0/api/ci-cd.yml?branch=master&label=CI%2FCD)](https://github.com/WomB0ComB0/api/actions/workflows/ci-cd.yml)
+[![Release](https://img.shields.io/github/v/release/WomB0ComB0/api)](https://github.com/WomB0ComB0/api/releases)
+[![License](https://img.shields.io/github/license/WomB0ComB0/api)](LICENSE)
+
+Production polyglot API platform hosted end-to-end on **Railway (US East)** alongside the Hexagonal Edge CDN [`WomB0ComB0/cdn`](https://github.com/WomB0ComB0/cdn) (**Cloudflare Workers + R2**), with native **Axiom OpenTelemetry** distributed tracing, **distributed sliding-window rate limiting**, and `zizmor`-audited CI/CD & SemVer releases.
 
 | Service | Route | Runtime & Stack | Key Capabilities |
 | :--- | :--- | :--- | :--- |
 | **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.9** | TLS termination, `zstd`/`gzip`, HSTS preload, Permissions-Policy, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`) |
-| **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs, 1-CTE refresh rotation, scoped `mk_live_*` API keys, O(1) `LRUCache` rate limiter, CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI, Eden Treaty |
-| **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/` & `private/`), HMAC-SHA256 private CDN signing, presigned direct PUTs, domain event bus, AST boundary enforcement |
+| **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs, 1-CTE refresh rotation, scoped `mk_live_*` API keys, **distributed Upstash Redis Lua + local fallback sliding-window rate limiter** (identity-keyed + IETF `RateLimit-*` headers), CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI, Eden Treaty |
+| **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/` & `private/`), **outer IP + post-JWT per-user cost-tiered sliding-window rate limiter**, HMAC-SHA256 private CDN signing, presigned direct PUTs, domain event bus, AST boundary enforcement |
 | **Links Service** | `/v1/links/*` | **Hasura GraphQL Engine** | Baked v3 metadata (`cli-migrations-v3`), JWT role/row permissions, `limit: 100` caps, production allow-list, single-query lateral-join compilation |
 | **Health Aggregator** | `/health` | **Python 3.12 (stdlib)** | Zero-dependency dual-stack IPv6/IPv4 server, shared thread pool, 2s coalesced probe cache (anti-thundering-herd), `GET`/`HEAD` support, graceful `SIGTERM` |
 | **Database** | Internal (`*.railway.internal`) | **PostgreSQL 18** | Multi-schema (`core`, `media`, `links`), auto-idempotent bootstrap, composite pagination indexes |
@@ -117,7 +121,7 @@ flowchart LR
 `services/core` follows official [ElysiaJS best practices](https://elysiajs.com/essential/best-practice) (feature modules with decoupled `service.ts`, TypeBox `model.ts`, named auth/admin macros, and Eden Treaty inference) powered by [`@resq-systems/*`](https://github.com/resq-software/npm) packages:
 
 - **`@resq-systems/logger`**: Structured JSON logging (`JsonTransport`) in production and colorized logs in dev.
-- **`@resq-systems/dsa`**: O(1) bounded `LRUCache` (`maxSize: 10_000`, lazy TTL) backing the global IP rate limiter.
+- **`@resq-systems/dsa`**: O(1) bounded `LRUCache` (`maxSize: 10_000`) backing the in-process weighted sliding-window fallback limiter.
 - **`@resq-systems/security`**: `generateSecureToken` & `hashData` (`Sha256Hex`) for refresh tokens and API keys, `encodeLogValue` + `sanitizeForLogging` (CWE-117 log/ANSI injection & secret scrubbing), and `containsBidiControls` (CVE-2021-42574 Trojan Source protection).
 - **`@resq-systems/types`**: Branded numeric bounds (`toPositiveInt`) and runtime guards (`isNonEmptyString`).
 
@@ -127,7 +131,7 @@ flowchart LR
     OTel["@elysiajs/opentelemetry\n(Axiom OTLP Span)"]
     Log["Request Logger\n@resq-systems/logger + CWE-117 encodeLogValue"]
     Sec["Security Headers\nCSP · HSTS · Frame-Options · Permissions-Policy"]
-    RL["Rate Limit + CORS + Server-Timing\n@resq-systems/dsa LRUCache (O(1) bounded)"]
+    RL["Distributed Rate Limit + CORS + Server-Timing\nUpstash Redis Lua Sliding Window + LRU Fallback\nIdentity Keying (JWT / Hashed API Key / IP)"]
     Macro["Named Auth / Admin Macro\nHS256 JWT or Atomic API Key UPDATE"]
 
     subgraph Modules["Feature Modules (/v1/core)"]
@@ -312,14 +316,22 @@ flowchart LR
     Trigger --> BA & GV & SL
 ```
 
-Weekly grouped dependency PRs are managed automatically via [`.github/dependabot.yml`](./.github/dependabot.yml) across `npm`, `gomod`, `docker`, and `github-actions`.
+Weekly grouped dependency PRs are managed automatically via [`.github/dependabot.yml`](./.github/dependabot.yml) across `bun`, `gomod`, `docker`, and `github-actions`. All workflows are audited with `zizmor` (`0` findings) with 40-char commit SHA pinning and `persist-credentials: false`.
+
+### SemVer Releases (`.github/workflows/release.yml`)
+
+Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` runs full strict verification (`Bun + Go + Python + Compose/Caddy`), publishes versioned GHCR images for all 5 services (`core`, `media`, `health`, `gateway`, `hasura`), packages `core-openapi-vX.Y.Z.json`, `media-linux-amd64-vX.Y.Z`, and `SHA256SUMS.txt`, and publishes a GitHub Release with categorized notes ([`.github/release.yml`](./.github/release.yml)).
 
 ---
 
 ## Security, Performance & Reliability Posture
 
-- **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`).
-- **Authentication & Abuse Prevention**: Argon2id password hashing with constant-time dummy verification on login (prevents email enumeration), HS256 JWT algorithm pinning, atomic refresh-token rotation, Trojan Source bidi rejection (`containsBidiControls`), CWE-117 log/ANSI escaping (`encodeLogValue`), bounded O(1) LRU IP rate limiting, and `1 MiB` request/header caps.
+- **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`), plus `zizmor` GitHub Actions supply-chain hardening.
+- **Distributed Rate Limiting (IETF `RateLimit-*` + `Retry-After`)**:
+  - `core-service`: Multi-policy router (`auth` `10/60s`, `auth-keys` `20/60s`, `write` `30/60s`, `read` `100/60s`; health/OpenAPI exempt), identity keying via `apikey:<sha256-16>` or verified HS256 JWT `user:<sub>` before IP, atomic 1-RTT Upstash Redis Lua sliding-window counter (`UPSTASH_REDIS_REST_URL`/`TOKEN`, `250ms` timeout + circuit breaker) with automatic bounded in-process weighted sliding-window fallback, and live `rate_limiter` telemetry on `GET /v1/core/status`.
+  - `media-service`: Bounded weighted sliding-window limiter with outer IP ceiling (`120/60s`) plus post-JWT per-user cost tiers (`20/60s` on `POST /upload`, `/presign`, `/purge`; `100/60s` on reads/sign/delete; health/OpenAPI exempt).
+  - `traefik/dynamic/middlewares.yml`: Tiered `global-ratelimit`, `auth-ratelimit`, and `write-ratelimit` middlewares with CORS `RateLimit-*` header exposure.
+- **Authentication & Abuse Prevention**: Argon2id password hashing with constant-time dummy verification on login (prevents email enumeration), HS256 JWT algorithm pinning, atomic refresh-token rotation, Trojan Source bidi rejection (`containsBidiControls`), CWE-117 log/ANSI escaping (`encodeLogValue`), and `1 MiB` request/header caps.
 - **Connection & Upstream Resilience**:
   - `core-service`: `pg.Pool` idle error listener (crash-proof on DB restart), `statement_timeout: 10s`, `query_timeout: 12s`, TCP `keepAlive`, `maxUses: 7500`.
   - `media-service`: `pgxpool` `HealthCheckPeriod: 30s`, `MaxConnLifetime: 30m`, `statement_timeout: 10s`, Slowloris `ReadHeaderTimeout: 10s`, HTTP/2 R2 transport with `3x` standard retries.
