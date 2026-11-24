@@ -72,6 +72,24 @@
 		file_server
 	}
 
+	@icons path /favicon.ico /icon.svg /apple-touch-icon.png
+	handle @icons {
+		header Cache-Control "public, max-age=86400"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		root * /srv/static
+		file_server
+	}
+
+	@ogimage path /opengraph-image /opengraph-image.png /twitter-image /twitter-image.png
+	handle @ogimage {
+		header Content-Type "image/png"
+		header Cache-Control "public, max-age=86400"
+		header Cross-Origin-Resource-Policy "cross-origin"
+		rewrite * /opengraph-image.png
+		root * /srv/static
+		file_server
+	}
+
 	@llms path /llms.txt /llms-full.txt
 	handle @llms {
 		header Content-Type "text/markdown; charset=utf-8"
