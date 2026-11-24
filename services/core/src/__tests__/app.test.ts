@@ -659,5 +659,24 @@ describe('Core API Service (Elysia + Eden Treaty)', () => {
     const echoedId = res.headers.get('x-request-id') ?? '';
     expect(echoedId).not.toContain('\u001b');
     expect(echoedId).toContain('req-123');
+
+    // Short-circuited 401/400 responses on /auth/* must STILL receive security headers + Cache-Control: no-store
+    const unauthMe = await app.handle(new Request('http://localhost/v1/core/auth/me'));
+    expect(unauthMe.status).toBe(401);
+    expect(unauthMe.headers.get('cache-control')).toBe('no-store');
+    expect(unauthMe.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(unauthMe.headers.get('content-security-policy')).toContain("default-src 'self'");
+
+    // Oversized refresh_token (> 256 chars) must be rejected with 400 AND carry Cache-Control: no-store
+    const hugeRefresh = await app.handle(
+      new Request('http://localhost/v1/core/auth/refresh', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: 'x'.repeat(512) }),
+      })
+    );
+    expect(hugeRefresh.status).toBe(400);
+    expect(hugeRefresh.headers.get('cache-control')).toBe('no-store');
+    expect(hugeRefresh.headers.get('x-content-type-options')).toBe('nosniff');
   });
 });

@@ -75,7 +75,7 @@ export const AuthModel = {
     expires_in: t.String(),
   }),
   refreshBody: t.Object({
-    refresh_token: t.String({ minLength: 16 }),
+    refresh_token: t.String({ minLength: 16, maxLength: 256 }),
   }),
   refreshResponse: TokenPairSchema,
   meResponse: UserProfileSchema,

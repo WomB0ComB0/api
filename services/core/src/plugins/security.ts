@@ -23,16 +23,20 @@ const CSP_DOCS = [
 
 /**
  * Helmet-style security headers plugin for Elysia.
+ * Uses `onRequest` so security headers and `Cache-Control: no-store` are ALWAYS applied —
+ * including when auth macros (401/403), rate limiter (429), validation (400), or onError (404/500)
+ * short-circuit before `onAfterHandle` executes.
  */
 export function createSecurityHeadersPlugin() {
-  return new Elysia({ name: 'core.security-headers' }).onAfterHandle({ as: 'global' }, ({ path, set }) => {
+  return new Elysia({ name: 'core.security-headers' }).onRequest(({ request, set }) => {
+    const pathname = new URL(request.url).pathname;
     set.headers['x-content-type-options'] = 'nosniff';
     set.headers['x-frame-options'] = 'DENY';
     set.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
     set.headers['permissions-policy'] = 'camera=(), microphone=(), geolocation=()';
     set.headers['strict-transport-security'] = 'max-age=31536000; includeSubDomains; preload';
-    set.headers['content-security-policy'] = path.startsWith('/v1/core/docs') ? CSP_DOCS : CSP_API;
-    if (path.startsWith('/v1/core/auth') || path.startsWith('/v1/core/users')) {
+    set.headers['content-security-policy'] = pathname.startsWith('/v1/core/docs') ? CSP_DOCS : CSP_API;
+    if (pathname.startsWith('/v1/core/auth') || pathname.startsWith('/v1/core/users')) {
       set.headers['cache-control'] = 'no-store';
     }
   });
