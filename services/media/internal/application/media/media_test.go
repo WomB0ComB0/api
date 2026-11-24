@@ -20,8 +20,17 @@ import (
 )
 
 type memStore struct {
-	objects map[string][]byte
-	types   map[string]string
+	objects         map[string][]byte
+	types           map[string]string
+	etags           map[string]string
+	mutateOnReadKey string // simulates concurrent TOCTOU PUT during ConfirmUpload
+}
+
+func (m *memStore) etagOf(key string) string {
+	if m.etags != nil && m.etags[key] != "" {
+		return m.etags[key]
+	}
+	return "etag-test"
 }
 
 func (m *memStore) PutObject(_ context.Context, key string, body io.Reader, ct string) (string, error) {
@@ -34,10 +43,13 @@ func (m *memStore) PutObject(_ context.Context, key string, body io.Reader, ct s
 	return "etag-test", nil
 }
 
-func (m *memStore) CopyObject(_ context.Context, srcKey, dstKey, ct string) (string, error) {
+func (m *memStore) CopyObject(_ context.Context, srcKey, dstKey, ct, expectedETag string) (string, error) {
 	b, ok := m.objects[srcKey]
 	if !ok {
 		return "", errors.New("not found")
+	}
+	if expectedETag != "" && m.etagOf(srcKey) != expectedETag {
+		return "", errors.New("precondition failed: etag mismatch")
 	}
 	cp := make([]byte, len(b))
 	copy(cp, b)
@@ -51,18 +63,30 @@ func (m *memStore) HeadObject(_ context.Context, key string) (*port.ObjectMeta, 
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return &port.ObjectMeta{Size: int64(len(b)), ContentType: m.types[key], ETag: "etag-test"}, nil
+	return &port.ObjectMeta{Size: int64(len(b)), ContentType: m.types[key], ETag: m.etagOf(key)}, nil
 }
 
-func (m *memStore) ReadObjectHead(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+func (m *memStore) ReadObjectHead(_ context.Context, key string, maxBytes int64, expectedETag string) ([]byte, error) {
 	b, ok := m.objects[key]
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	if int64(len(b)) > maxBytes {
-		return b[:maxBytes], nil
+	if expectedETag != "" && m.etagOf(key) != expectedETag {
+		return nil, errors.New("precondition failed: etag mismatch")
 	}
-	return b, nil
+	out := b
+	if int64(len(out)) > maxBytes {
+		out = out[:maxBytes]
+	}
+	// If test arming a TOCTOU race, mutate the staging object's ETag right after head read (before CopyObject!)
+	if m.mutateOnReadKey == key {
+		if m.etags == nil {
+			m.etags = map[string]string{}
+		}
+		m.etags[key] = "etag-mutated-by-attacker"
+		m.objects[key] = []byte("<html>TOCTOU-race-payload</html>")
+	}
+	return out, nil
 }
 
 func (m *memStore) DeleteObject(_ context.Context, key string) error {
@@ -364,18 +388,54 @@ func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
 	if _, stillInStaging := store.objects[pre.Key]; stillInStaging {
 		t.Fatalf("staging object must be removed after promotion")
 	}
-	// Replaying confirm on already-promoted staging key must fail with NotFound
+	// Replaying confirm on already-promoted staging key must fail with Conflict (single-use invariant!)
 	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
 		Actor:    u1,
 		Key:      pre.Key,
 		Filename: "photo.png",
-	}); !apperr.IsType(err, apperr.TypeNotFound) {
-		t.Fatalf("expected replay confirm to return NotFound, got %v", err)
+	}); !apperr.IsType(err, apperr.TypeConflict) {
+		t.Fatalf("expected replay confirm on already-promoted key to return Conflict, got %v", err)
 	}
-	// Post-confirm TOCTOU: reusing the presigned URL only writes to staging/*, leaving live assets/* untouched!
-	store.objects[pre.Key] = []byte("<html>TOCTOU-evil</html>")
+	// Post-confirm TOCTOU: reusing the presigned URL to write a NEW valid PNG and re-confirming must fail with Conflict
+	// and purge staging/* while leaving the original live immutable asset untouched!
+	store.objects[pre.Key] = []byte("\x89PNG\r\n\x1a\nsecond-png-attempt")
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      pre.Key,
+		Filename: "photo.png",
+	}); !apperr.IsType(err, apperr.TypeConflict) {
+		t.Fatalf("expected second confirm after staging overwrite to return Conflict, got %v", err)
+	}
 	if !bytes.Equal(store.objects[confirmed.Key], validPNG) {
 		t.Fatalf("live confirmed asset was mutated by post-confirm staging overwrite")
+	}
+	if _, stillInStaging := store.objects[pre.Key]; stillInStaging {
+		t.Fatalf("reused staging object must be deleted on Conflict")
+	}
+
+	// 6b. Mid-confirm ETag TOCTOU race: attacker swaps staging object between ReadObjectHead and CopyObject -> must abort (409)!
+	preRace, err := factory.PresignUpload().Execute(context.Background(), media.PresignInput{
+		Actor:       u1,
+		Filename:    "race.png",
+		ContentType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("presign race failed: %v", err)
+	}
+	store.objects[preRace.Key] = validPNG
+	store.types[preRace.Key] = "image/png"
+	store.mutateOnReadKey = preRace.Key
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      preRace.Key,
+		Filename: "race.png",
+	}); !apperr.IsType(err, apperr.TypeConflict) {
+		t.Fatalf("expected mid-confirm ETag TOCTOU race to fail with Conflict, got %v", err)
+	}
+	store.mutateOnReadKey = ""
+	liveRaceKey := strings.TrimPrefix(preRace.Key, "staging/")
+	if _, leaked := store.objects[liveRaceKey]; leaked {
+		t.Fatalf("TOCTOU-mutated object must NEVER be promoted to live prefix")
 	}
 
 	// 7. Nemesis Finding 2: transient DB Save error on duplicate re-upload must NOT delete pre-existing live R2 object!

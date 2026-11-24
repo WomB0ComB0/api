@@ -78,15 +78,21 @@ func Load() *Config {
 }
 
 func (c *Config) Validate() error {
+	if c.MaxUploadBytes <= 0 {
+		return fmt.Errorf("MAX_UPLOAD_BYTES must be positive")
+	}
 	if c.Env == "production" {
-		if len(c.JWTSecret) < 32 {
-			return fmt.Errorf("JWT_SECRET must be at least 32 bytes in production")
+		if len(c.JWTSecret) < 32 || c.JWTSecret == defaultDevJWTSecret {
+			return fmt.Errorf("JWT_SECRET must be a non-default secret of at least 32 bytes in production")
 		}
-		if len(c.SigningSecret) < 32 {
-			return fmt.Errorf("SIGNING_SECRET must be at least 32 bytes in production")
+		if len(c.SigningSecret) < 32 || c.SigningSecret == defaultDevSigningSecret {
+			return fmt.Errorf("SIGNING_SECRET must be a non-default secret of at least 32 bytes in production")
 		}
-		if c.R2Bucket == "" || c.R2Endpoint == "" {
-			return fmt.Errorf("CLOUDFLARE_R2_BUCKET and CLOUDFLARE_R2_ACCOUNT_ID/ENDPOINT are required in production")
+		if c.JWTSecret == c.SigningSecret {
+			return fmt.Errorf("JWT_SECRET and SIGNING_SECRET must be distinct in production")
+		}
+		if c.R2Bucket == "" || c.R2Endpoint == "" || c.R2AccessKeyID == "" || c.R2SecretAccessKey == "" {
+			return fmt.Errorf("CLOUDFLARE_R2_BUCKET, ENDPOINT, ACCESS_KEY_ID, and SECRET_ACCESS_KEY are required in production")
 		}
 	}
 	return nil

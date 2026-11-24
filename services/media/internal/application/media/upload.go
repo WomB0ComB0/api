@@ -65,6 +65,11 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 		return nil, err
 	}
 
+	effectiveMax := uc.maxUploadBytes
+	if filename.Ext == ".svg" && model.MaxSVGBytes < effectiveMax {
+		effectiveMax = model.MaxSVGBytes
+	}
+
 	sniffBuf := make([]byte, 512)
 	n, readErr := io.ReadFull(in.File, sniffBuf)
 	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
@@ -74,7 +79,11 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 
 	hash := sha256.New()
 	hash.Write(sniffBuf)
-	rest, err := io.Copy(hash, io.LimitReader(in.File, uc.maxUploadBytes-int64(n)+1))
+	remainingBudget := effectiveMax - int64(n) + 1
+	if remainingBudget < 0 {
+		remainingBudget = 0
+	}
+	rest, err := io.Copy(hash, io.LimitReader(in.File, remainingBudget))
 	if err != nil {
 		return nil, apperr.System("failed to hash uploaded file", err)
 	}
@@ -82,7 +91,10 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 	if totalSize == 0 {
 		return nil, apperr.Validation("uploaded file is empty")
 	}
-	if totalSize > uc.maxUploadBytes {
+	if totalSize > effectiveMax {
+		if filename.Ext == ".svg" && totalSize > model.MaxSVGBytes {
+			return nil, apperr.TooLarge("SVG file exceeds maximum allowed size (2 MiB)")
+		}
 		return nil, apperr.TooLarge("file exceeds maximum allowed size")
 	}
 

@@ -115,6 +115,13 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		return nil, err
 	}
 
+	// Single-use presign invariant: once finalKey exists in live storage, re-confirming via a reused
+	// presigned URL must be refused with 409 Conflict so immutable CDN assets can never be mutated.
+	if _, existsErr := uc.store.HeadObject(ctx, finalKey); existsErr == nil {
+		_ = uc.store.DeleteObject(ctx, cleanKey)
+		return nil, apperr.Conflict("upload has already been confirmed")
+	}
+
 	meta, err := uc.store.HeadObject(ctx, cleanKey)
 	if err != nil {
 		return nil, apperr.NotFound("uploaded object not found in storage")
@@ -136,9 +143,11 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 	if filename.Ext == ".svg" {
 		readLimit = model.MaxSVGBytes
 	}
-	headBytes, err := uc.store.ReadObjectHead(ctx, cleanKey, readLimit)
+	// Pin both ReadObjectHead and CopyObject to meta.ETag (S3 IfMatch / CopySourceIfMatch)
+	// so concurrent PUTs to the staging key during confirmation abort atomically (zero TOCTOU window).
+	headBytes, err := uc.store.ReadObjectHead(ctx, cleanKey, readLimit, meta.ETag)
 	if err != nil {
-		return nil, apperr.External("failed to verify uploaded object content", err)
+		return nil, apperr.Conflict("uploaded object changed during verification; retry upload")
 	}
 	mimeType, err := model.ValidateUploadContent(filename, meta.ContentType, headBytes)
 	if err != nil {
@@ -153,10 +162,10 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 	}
 
 	// Atomically promote verified staging object into live serving prefix with canonical Content-Type,
-	// closing both pre-confirm unverified serving AND post-confirm TOCTOU overwrite via reused presigned URLs.
-	promotedETag, err := uc.store.CopyObject(ctx, cleanKey, finalKey, mimeType)
+	// closing pre-confirm serving, mid-confirm ETag TOCTOU, and post-confirm overwrites.
+	promotedETag, err := uc.store.CopyObject(ctx, cleanKey, finalKey, mimeType, meta.ETag)
 	if err != nil {
-		return nil, apperr.External("failed to promote verified upload", err)
+		return nil, apperr.Conflict("uploaded object changed during promotion; retry upload")
 	}
 	if promotedETag == "" {
 		promotedETag = meta.ETag

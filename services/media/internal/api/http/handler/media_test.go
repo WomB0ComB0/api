@@ -46,10 +46,13 @@ func (m *memoryStore) PutObject(_ context.Context, key string, body io.Reader, c
 	return "etag-123", nil
 }
 
-func (m *memoryStore) CopyObject(_ context.Context, srcKey, dstKey, ct string) (string, error) {
+func (m *memoryStore) CopyObject(_ context.Context, srcKey, dstKey, ct, expectedETag string) (string, error) {
 	b, ok := m.objects[srcKey]
 	if !ok {
 		return "", errors.New("not found")
+	}
+	if expectedETag != "" && expectedETag != "etag-123" {
+		return "", errors.New("etag mismatch")
 	}
 	cp := make([]byte, len(b))
 	copy(cp, b)
@@ -66,10 +69,13 @@ func (m *memoryStore) HeadObject(_ context.Context, key string) (*port.ObjectMet
 	return &port.ObjectMeta{Size: int64(len(b)), ContentType: m.types[key], ETag: "etag-123"}, nil
 }
 
-func (m *memoryStore) ReadObjectHead(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+func (m *memoryStore) ReadObjectHead(_ context.Context, key string, maxBytes int64, expectedETag string) ([]byte, error) {
 	b, ok := m.objects[key]
 	if !ok {
 		return nil, errors.New("not found")
+	}
+	if expectedETag != "" && expectedETag != "etag-123" {
+		return nil, errors.New("etag mismatch")
 	}
 	if int64(len(b)) > maxBytes {
 		return b[:maxBytes], nil

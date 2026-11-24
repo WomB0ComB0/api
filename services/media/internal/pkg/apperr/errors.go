@@ -78,6 +78,7 @@ func Validation(message string) *AppError   { return New(TypeValidation, message
 func NotFound(message string) *AppError     { return New(TypeNotFound, message) }
 func Unauthorized(message string) *AppError { return New(TypeUnauthorized, message) }
 func Forbidden(message string) *AppError    { return New(TypeForbidden, message) }
+func Conflict(message string) *AppError     { return New(TypeConflict, message) }
 func TooLarge(message string) *AppError     { return New(TypeTooLarge, message) }
 func Unavailable(message string) *AppError  { return New(TypeUnavailable, message) }
 func External(message string, cause error) *AppError {

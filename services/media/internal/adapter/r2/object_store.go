@@ -88,19 +88,31 @@ func (s *ObjectStore) PutObject(ctx context.Context, key string, body io.Reader,
 	return strings.Trim(aws.ToString(out.ETag), `"`), nil
 }
 
-func (s *ObjectStore) CopyObject(ctx context.Context, srcKey, dstKey, contentType string) (string, error) {
+func quoteETag(etag string) string {
+	trimmed := strings.Trim(strings.TrimSpace(etag), `"`)
+	if trimmed == "" {
+		return ""
+	}
+	return `"` + trimmed + `"`
+}
+
+func (s *ObjectStore) CopyObject(ctx context.Context, srcKey, dstKey, contentType, expectedETag string) (string, error) {
 	segments := strings.Split(strings.TrimLeft(srcKey, "/"), "/")
 	for i, seg := range segments {
 		segments[i] = url.PathEscape(seg)
 	}
 	copySource := fmt.Sprintf("%s/%s", url.PathEscape(s.bucket), strings.Join(segments, "/"))
-	out, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+	input := &s3.CopyObjectInput{
 		Bucket:            aws.String(s.bucket),
 		Key:               aws.String(dstKey),
 		CopySource:        aws.String(copySource),
 		ContentType:       aws.String(contentType),
 		MetadataDirective: s3types.MetadataDirectiveReplace,
-	})
+	}
+	if quoted := quoteETag(expectedETag); quoted != "" {
+		input.CopySourceIfMatch = aws.String(quoted)
+	}
+	out, err := s.client.CopyObject(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -125,15 +137,19 @@ func (s *ObjectStore) HeadObject(ctx context.Context, key string) (*port.ObjectM
 	}, nil
 }
 
-func (s *ObjectStore) ReadObjectHead(ctx context.Context, key string, maxBytes int64) ([]byte, error) {
+func (s *ObjectStore) ReadObjectHead(ctx context.Context, key string, maxBytes int64, expectedETag string) ([]byte, error) {
 	if maxBytes <= 0 {
 		maxBytes = 512
 	}
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+	input := &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 		Range:  aws.String(fmt.Sprintf("bytes=0-%d", maxBytes-1)),
-	})
+	}
+	if quoted := quoteETag(expectedETag); quoted != "" {
+		input.IfMatch = aws.String(quoted)
+	}
+	out, err := s.client.GetObject(ctx, input)
 	if err != nil {
 		return nil, err
 	}
