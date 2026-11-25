@@ -5,6 +5,14 @@
 set -euo pipefail
 umask 077
 
+report_heartbeat_failure() {
+    local exit_code=$?
+    if [ -n "${BETTERSTACK_HEARTBEAT_URL:-}" ]; then
+        curl -fsS --max-time 10 "${BETTERSTACK_HEARTBEAT_URL%/}/${exit_code}" > /dev/null 2>&1 || true
+    fi
+}
+trap report_heartbeat_failure ERR
+
 BACKUP_DIR="backups"
 RETENTION_DAYS=30
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
