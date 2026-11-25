@@ -5,7 +5,7 @@
 ## Documentation & Discovery
 
 - [API Console & Reference](https://api.mikeodnis.dev/): Human-readable Live Console overview, live health telemetry, rate limits, and working curl examples.
-- [Unified Interactive OpenAPI Docs](https://api.mikeodnis.dev/docs): Multi-spec Scalar UI covering both Core API and Media API.
+- [Unified Interactive OpenAPI Docs](https://api.mikeodnis.dev/docs): Multi-spec Scalar UI covering Core API, Media API, and CDN Edge API.
 - [Core API Interactive Docs](https://api.mikeodnis.dev/v1/core/docs): Scalar reference for `/v1/core/*`.
 - [Core OpenAPI 3.1 JSON](https://api.mikeodnis.dev/v1/core/openapi.json): Machine-readable Core API schema.
 - [Media OpenAPI 3.0 JSON](https://api.mikeodnis.dev/v1/media/openapi.json): Machine-readable Media API schema.
@@ -14,10 +14,10 @@
 
 ## Services
 
-- **Core Service (`/v1/core`)**: ElysiaJS + Bun — registration, login, rotating refresh tokens, HS256 JWTs with Hasura claims, scoped `mk_live_*` API keys, user profiles, and runtime metrics (`/v1/core/status`).
-- **Media Service (`/v1/media`)**: Go Chi — direct multipart uploads (up to 100 MiB) to Cloudflare R2, presigned direct-to-R2 PUT URLs, HMAC-SHA256 private CDN URL signing, asset listing/deletion, and Cloudflare edge cache purging.
-- **Links GraphQL (`/v1/links/graphql`)**: Hasura GraphQL Engine serving `links.mikeodnis.dev` short-link storage and analytics.
-- **Health Aggregator (`/health`)**: Unified liveness and dependency health across all platform services.
+- **Core Service (`/v1/core`)**: ElysiaJS + Bun — registration, login, rotating refresh tokens, HS256 JWTs (`exp` required) with Hasura claims, scoped `mk_live_*` API keys (`read` scope enforced; JWT-only key/account/admin management), user profiles, and runtime metrics (`/v1/core/status`).
+- **Media Service (`/v1/media`)**: Go Chi — magic-byte & SVG verified multipart uploads (up to 100 MiB; SVG 2 MiB) to Cloudflare R2, quarantined `staging/*` presigned PUTs with ETag-pinned atomic promotion, HMAC-SHA256 `private/*` CDN URL signing, asset listing/deletion, and Cloudflare edge cache purging.
+- **Links GraphQL (`/v1/links/graphql`, `/v1/links/v1/graphql`)**: Allow-listed Hasura GraphQL Engine (`256KB` body cap; admin/metadata/SQL/console routes blocked at gateway) serving `links.mikeodnis.dev`.
+- **Health Aggregator (`/health`)**: 2s coalesced liveness and dependency health across all platform services (sanitized, no internal URLs).
 
 ## Companion Properties (*.mikeodnis.dev)
 

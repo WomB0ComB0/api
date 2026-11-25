@@ -8,11 +8,11 @@ Production polyglot API platform hosted end-to-end on **Railway (US East)** alon
 
 | Service | Route | Runtime & Stack | Key Capabilities |
 | :--- | :--- | :--- | :--- |
-| **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.9** | TLS termination, `zstd`/`gzip`, HSTS preload, Permissions-Policy, CORP, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`), static **Live Console** portal (`/`), unified **Scalar OpenAPI Docs** (`/docs`), **LLM/AEO & RFC 9116 discovery** (`/llms.txt`, `/llms-full.txt`, `/.well-known/security.txt`, `/robots.txt`, `/sitemap.xml`), and **Wolf-Mark icons + OpenGraph cards** |
-| **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs, 1-CTE refresh rotation, scoped `mk_live_*` API keys, **distributed Upstash Redis Lua + local fallback sliding-window rate limiter** (identity-keyed + IETF `RateLimit-*` headers), CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI, Eden Treaty |
-| **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/` & `private/`), **outer IP + post-JWT per-user cost-tiered sliding-window rate limiter**, HMAC-SHA256 private CDN signing, presigned direct PUTs, domain event bus, AST boundary enforcement |
-| **Links Service** | `/v1/links/*` | **Hasura GraphQL Engine** | Baked v3 metadata (`cli-migrations-v3`), JWT role/row permissions, `limit: 100` caps, production allow-list, single-query lateral-join compilation |
-| **Health Aggregator** | `/health` | **Python 3.12 (stdlib)** | Zero-dependency dual-stack IPv6/IPv4 server, shared thread pool, 2s coalesced probe cache (anti-thundering-herd), `GET`/`HEAD` support, graceful `SIGTERM` |
+| **Gateway** | `api.mikeodnis.dev` & `cdn.mikeodnis.dev` | **Caddy 2.11** | TLS termination, `zstd`/`gzip`, `trusted_proxies_strict` private-mesh IP resolution, fail-closed Hasura allowlist (`256KB` GraphQL cap, strips `X-Hasura-Admin-Secret`/`X-Hasura-Access-Key`), authenticated `X-Gateway-Client-IP` handoff to `cdn-worker`, HSTS preload, CORP, upstream keepalive pools (`64`/`32`), `3s` rolling-restart retry (`lb_try_duration`), static **Live Console** portal (`/`), unified **Scalar OpenAPI Docs** (`/docs`), **LLM/AEO & RFC 9116 discovery**, and **Wolf-Mark icons + OpenGraph cards** |
+| **Core Service** | `/v1/core/*` | **Bun 1.4 + Elysia** + [`@resq-systems/*`](https://github.com/resq-software/npm) | Feature modules, named auth/admin macros, Argon2id + HS256 Hasura JWTs (`exp` required), 1-CTE refresh rotation, scoped `mk_live_*` API keys (scope enforcement + JWT-only key/account/admin management), **distributed Upstash Redis Lua + LRU fallback sliding-window rate limiter** (IP-only `auth`, dual IP+key protection, right-to-left XFF extraction, IETF `RateLimit-*` headers), `onRequest` security headers + `no-store`, 2s coalesced `/health/ready`, CWE-117 log sanitization, Trojan Source bidi protection, OpenAPI 3.1 + Scalar UI |
+| **Media Service** | `/v1/media/*` | **Go 1.26.11 (Hexagonal + DDD)** | `chi/v5`, `pgx/v5`, AWS S3 SDK v2 (HTTP/2 + retries), Cloudflare R2 (`assets/`, `private/`, quarantined `staging/*`), WSTG-BUSL-08/09 3-way magic-byte + full-document SVG XSS/XXE verification, ETag-pinned atomic `CopyObject` staging promotion (single-use `409`), **outer IP + post-JWT per-user cost-tiered sliding-window rate limiter** (`20/min` writes incl. `confirm` & `DELETE`), 2s coalesced `/health/ready`, HMAC-SHA256 private CDN signing, domain event bus, AST boundary enforcement |
+| **Links Service** | `/v1/links/graphql` & `/v1/links/v1/graphql` | **Hasura GraphQL Engine** | Baked v3 metadata (`cli-migrations-v3`), JWT role/row permissions, `limit: 100` caps, production allow-list, single-query lateral-join compilation, admin/metadata/SQL/console routes blocked at Caddy |
+| **Health Aggregator** | `/health` | **Python 3.12 (stdlib)** | Zero-dependency dual-stack IPv6/IPv4 server, shared thread pool, 2s coalesced probe cache, bounded 64 KiB upstream drain, 10s socket timeout, sanitized errors with zero internal URL leakage, `GET`/`HEAD` support, graceful `SIGTERM` |
 | **Database** | Internal (`*.railway.internal`) | **PostgreSQL 18** | Multi-schema (`core`, `media`, `links`), auto-idempotent bootstrap, composite pagination indexes |
 | **Observability** | US East Edge OTLP | **Axiom (`otel:traces:v1`)** | Direct OTLP/HTTP trace export (`core-service` + `media-service`) via least-privilege ingest token |
 
@@ -183,14 +183,15 @@ sequenceDiagram
     end
 
     rect rgba(37, 198, 138, 0.08)
-        Note over Client,CDN: Path B — Direct-to-R2 Presigned PUT + Confirm
+        Note over Client,CDN: Path B — Quarantined Direct-to-R2 Presigned PUT + ETag-Pinned Confirm
         Client->>Media: POST /v1/media/presign { filename, content_type, visibility }
-        Media-->>Client: { upload_url (15m S3 presigned PUT), key }
-        Client->>R2: PUT upload_url (direct binary stream)
-        Client->>Media: POST /v1/media/assets/confirm { key, filename }
-        Media->>R2: HeadObject (verify size, ETag, content_type)
-        Media->>PG: Upsert media.assets row
-        Media-->>Client: 201 Created (AssetDTO)
+        Media-->>Client: { upload_url (15m S3 presigned PUT), key: "staging/..." }
+        Client->>R2: PUT upload_url (direct binary stream to non-servable staging/*)
+        Client->>Media: POST /v1/media/assets/confirm { key, filename, metadata }
+        Media->>R2: HeadObject + ETag-pinned ReadObjectHead (magic-byte + SVG scan)
+        Media->>R2: ETag-pinned CopyObject (staging/* -> assets/* or private/*) + DeleteObject(staging)
+        Media->>PG: Upsert media.assets row (owner-guarded ON CONFLICT)
+        Media-->>Client: 201 Created (AssetDTO; replays return 409 Conflict)
     end
 
     Client->>Media: DELETE /v1/media/assets/{id} (Bearer JWT)
@@ -326,17 +327,20 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 
 ## Security, Performance & Reliability Posture
 
-- **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`), plus `zizmor` GitHub Actions supply-chain hardening.
+- **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`), plus `zizmor` GitHub Actions supply-chain hardening and strict `--frozen-lockfile` Docker builds.
 - **Distributed Rate Limiting (IETF `RateLimit-*` + `Retry-After`)**:
-  - `core-service`: Multi-policy router (`auth` `10/60s`, `auth-keys` `20/60s`, `write` `30/60s`, `read` `100/60s`; health/OpenAPI exempt), identity keying via `apikey:<sha256-16>` or verified HS256 JWT `user:<sub>` before IP, atomic 1-RTT Upstash Redis Lua sliding-window counter (`UPSTASH_REDIS_REST_URL`/`TOKEN`, `250ms` timeout + circuit breaker) with automatic bounded in-process weighted sliding-window fallback, and live `rate_limiter` telemetry on `GET /v1/core/status`.
-  - `media-service`: Bounded weighted sliding-window limiter with outer IP ceiling (`120/60s`) plus post-JWT per-user cost tiers (`20/60s` on `POST /upload`, `/presign`, `/purge`; `100/60s` on reads/sign/delete; health/OpenAPI exempt).
-  - `traefik/dynamic/middlewares.yml`: Tiered `global-ratelimit`, `auth-ratelimit`, and `write-ratelimit` middlewares with CORS `RateLimit-*` header exposure.
-- **Authentication & Abuse Prevention**: Argon2id password hashing with constant-time dummy verification on login (prevents email enumeration), HS256 JWT algorithm pinning, atomic refresh-token rotation, Trojan Source bidi rejection (`containsBidiControls`), CWE-117 log/ANSI escaping (`encodeLogValue`), and `1 MiB` request/header caps.
+  - `core-service`: Multi-policy router (`auth` `10/60s` always keyed by non-spoofable right-to-left XFF client IP; `auth-keys` `20/60s` keyed by verified JWT/IP; `write` `30/60s` and `read` `100/60s` using verified HS256 JWT or dual outer-IP + `apikey:<sha256-16>` keying to block fake-key floods; health/OpenAPI exempt), atomic 1-RTT Upstash Redis Lua sliding-window counter (`250ms` timeout + circuit breaker) with bounded LRU weighted sliding-window fallback, and live `rate_limiter` telemetry on `GET /v1/core/status` (`no-store`).
+  - `media-service`: Bounded weighted sliding-window limiter with outer IP ceiling (`120/60s`, fail-closed private-mesh XFF) plus post-JWT per-user cost tiers (`20/60s` on `POST /upload`, `/presign`, `/assets/confirm`, `/purge`, and `DELETE /assets/{id}`; `100/60s` on reads/sign; health/OpenAPI exempt).
+  - `gateway` → `cdn-worker`: Caddy forwards `{client_ip}` paired with a shared `GATEWAY_PROXY_SECRET` (`X-Gateway-Proxy-Secret` constant-time verified in `cdn-worker`) so `cdn.mikeodnis.dev` enforces isolated per-visitor edge rate limits.
+- **Authentication, Upload & Gateway Hardening**:
+  - **Core**: Argon2id password hashing with constant-time dummy verification on login, HS256 JWT algorithm pinning + mandatory `exp` claim, atomic 1-CTE refresh-token rotation (`maxLength: 256`), API-key scope enforcement (`read` required on `/me` & `/users/:id`; JWT-only for API key management, account mutations/deletes, and admin routes), `onRequest` security headers + `Cache-Control: no-store` on all `2xx`/`4xx`/`5xx` auth/user/status responses, Trojan Source bidi rejection, whitespace-only name rejection, and CWE-117 log escaping.
+  - **Media (WSTG-BUSL-08/09)**: 3-way magic-byte + extension + MIME verification (with 513 B UTF-8 truncation sentinel), full-document entity-decoded SVG XSS/XXE/animation/external-`<use>` scanning (`2 MiB` cap), quarantined `staging/*` presigned uploads with ETag-pinned `ReadObjectHead` + atomic `CopyObject` promotion + single-use `409 Conflict` guard, strict `DisallowUnknownFields()` JSON decoding, metadata depth/size/prototype-pollution limits, and owner-guarded Postgres upserts.
+  - **Hasura Gateway Allowlist**: Caddy blocks all Hasura admin/metadata/SQL/console/version endpoints (`/v1/metadata`, `/v1/query`, `/v2/query`, `/console`, `/v1/version`), strips `X-Hasura-Admin-Secret` and `X-Hasura-Access-Key`, and enforces a `256KB` GraphQL body cap.
 - **Connection & Upstream Resilience**:
-  - `core-service`: `pg.Pool` idle error listener (crash-proof on DB restart), `statement_timeout: 10s`, `query_timeout: 12s`, TCP `keepAlive`, `maxUses: 7500`.
-  - `media-service`: `pgxpool` `HealthCheckPeriod: 30s`, `MaxConnLifetime: 30m`, `statement_timeout: 10s`, Slowloris `ReadHeaderTimeout: 10s`, HTTP/2 R2 transport with `3x` standard retries.
-  - `health-aggregator`: shared thread pool, 2s coalesced cache (prevents probe storms), `GET`/`HEAD` support, graceful `SIGTERM`.
-  - `gateway`: Caddy `lb_try_duration 3s` / `lb_try_interval 250ms` (absorbs rolling container restarts), HTTP keepalive pools (`64`/`32`), HSTS preload + security headers.
+  - `core-service`: `pg.Pool` idle error listener, `statement_timeout: 10s`, `query_timeout: 12s`, 2s single-flight `/health/ready` DB cache, `maxRequestBodySize: 1 MiB`.
+  - `media-service`: `pgxpool` `HealthCheckPeriod: 30s`, `MaxConnLifetime: 30m`, `statement_timeout: 10s`, 2s single-flight `/health/ready` Postgres+R2 cache, `ReadHeaderTimeout: 10s`, HTTP/2 R2 transport with `3x` retries.
+  - `health-aggregator`: shared thread pool, 2s coalesced cache, bounded 64 KiB body drain, 10s idle socket timeout, sanitized errors with zero internal URL leakage, `PYTHONOPTIMIZE=2`-safe Docker `HEALTHCHECK`, `GET`/`HEAD`, graceful `SIGTERM`.
+  - `gateway`: Caddy 2.11 `trusted_proxies_strict`, `lb_try_duration 3s` / `lb_try_interval 250ms`, HTTP keepalive pools (`64`/`32`), HSTS preload + non-clobbering `?Referrer-Policy` / `?Permissions-Policy` / `?CORP`.
 
 ---
 
@@ -346,7 +350,7 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
 | `GET`/`HEAD` | `/` | Public | Content-negotiated: Live Console HTML portal + live `/health` telemetry + JSON-LD (`WebAPI`, `FAQPage`) for browsers; JSON service descriptor for API/CLI clients |
-| `GET` | `/docs` | Public | Unified multi-spec **Scalar OpenAPI 3.1** UI loading both Core API & Media API |
+| `GET` | `/docs` | Public | Unified multi-spec **Scalar OpenAPI 3.1** UI loading Core API, Media API & CDN Edge API |
 | `GET` | `/llms.txt`, `/llms-full.txt` | Public | Concise and full LLM/AEO guides for AI crawlers & coding agents |
 | `GET` | `/.well-known/security.txt`, `/robots.txt`, `/sitemap.xml` | Public | RFC 9116 security policy, explicit AI crawler rules (`GPTBot`, `OAI-SearchBot`, `ClaudeBot`, `PerplexityBot`), XML sitemap |
 | `GET` | `/favicon.ico`, `/icon.svg`, `/apple-touch-icon.png` | Public | Live Console Wolf-Mark favicons & Apple Touch icon (`CORP: cross-origin`) |
@@ -356,35 +360,35 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
 | `GET`/`HEAD` | `/v1/core`, `/status`, `/version`, `/info` | Public | Root, runtime memory/uptime, version, metadata |
-| `GET`/`HEAD` | `/v1/core/health`, `/v1/core/health/ready` | Public | Liveness & PostgreSQL readiness probes |
+| `GET`/`HEAD` | `/v1/core/health`, `/v1/core/health/ready` | Public | Liveness & 2s coalesced PostgreSQL readiness probes (`no-store`) |
 | `GET` | `/v1/core/docs`, `/v1/core/openapi.json` | Public | Scalar OpenAPI 3.1 UI & raw JSON spec |
 | `POST` | `/v1/core/auth/register` | Public | Create account + issue JWT & refresh token (1 CTE) |
 | `POST` | `/v1/core/auth/login` | Public | Constant-time Argon2id verify + issue token pair |
-| `POST` | `/v1/core/auth/refresh` | Public | Atomically rotate refresh token (1 CTE) |
+| `POST` | `/v1/core/auth/refresh` | Public | Atomically rotate refresh token (1 CTE, max 256 chars) |
 | `POST` | `/v1/core/auth/logout` | Public | Revoke refresh token |
-| `GET` | `/v1/core/auth/me` | JWT / API Key | Current authenticated user profile |
-| `POST`/`GET`/`DELETE` | `/v1/core/auth/api-keys`, `/api-keys/:id` | JWT | Create, list (`LIMIT 100`), and revoke scoped `mk_live_*` keys |
-| `GET` | `/v1/core/users` | Admin JWT | Paginated user list with `total` (`COUNT(*) OVER()`) |
-| `GET`/`PATCH`/`DELETE` | `/v1/core/users/:id` | Self / Admin | Read, update, or delete user |
+| `GET` | `/v1/core/auth/me` | JWT / `read` API Key | Current authenticated user profile |
+| `POST`/`GET`/`DELETE` | `/v1/core/auth/api-keys`, `/api-keys/:id` | JWT only | Create (max 4 unique scopes), list (`LIMIT 100`), and revoke scoped `mk_live_*` keys |
+| `GET` | `/v1/core/users` | Admin JWT | Paginated user list (`offset <= 10000`) with `total` (`COUNT(*) OVER()`) |
+| `GET`/`PATCH`/`DELETE` | `/v1/core/users/:id` | Self / Admin JWT (`GET` also accepts self `read` API key) | Read, update, or delete user |
 
 ### Media Service (`/v1/media`)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/v1/media/health`, `/health/ready`, `/openapi.json` | Public | Liveness, Postgres+R2 readiness, OpenAPI spec |
-| `POST` | `/v1/media/upload` | JWT | Multipart upload to R2 (`assets/` or `private/`) + DB record |
-| `POST` | `/v1/media/presign` | JWT | Direct-to-R2 15m presigned PUT URL (blocks HTML/JS MIME) |
-| `POST` | `/v1/media/assets/confirm` | JWT | Verify presigned object via `HeadObject` and persist metadata |
-| `POST` | `/v1/media/sign` | JWT | Generate HMAC-SHA256 signed `cdn.mikeodnis.dev/private/*` URL |
-| `POST` | `/v1/media/purge` | JWT | Purge Cloudflare edge cache (owner-scoped or admin) |
-| `GET` | `/v1/media/assets` | JWT | Paginated asset list with `total` (`COUNT(*) OVER()`) |
-| `GET`/`DELETE` | `/v1/media/assets/:id` | Owner / Admin | Fetch metadata or delete from R2 + DB + event-driven purge |
+| `GET` | `/v1/media/health`, `/health/ready`, `/openapi.json` | Public | Liveness, 2s coalesced Postgres+R2 readiness, OpenAPI spec |
+| `POST` | `/v1/media/upload` | JWT | Multipart upload (WSTG-BUSL-08/09 magic-byte + SVG verified) to R2 (`assets/` or `private/`) + DB record |
+| `POST` | `/v1/media/presign` | JWT | Direct-to-R2 15m presigned PUT URL targeting quarantined `staging/*` prefix (allowlisted MIME) |
+| `POST` | `/v1/media/assets/confirm` | JWT | ETag-pinned magic-byte + SVG verification, atomic `CopyObject` promotion, single-use `409` guard |
+| `POST` | `/v1/media/sign` | JWT | Generate HMAC-SHA256 signed `cdn.mikeodnis.dev/private/*` URL (`private/*` only) |
+| `POST` | `/v1/media/purge` | JWT | Purge Cloudflare edge cache (owner-scoped or admin, traversal-hardened) |
+| `GET` | `/v1/media/assets` | JWT | Paginated asset list (`offset <= 10000`) with `total` (`COUNT(*) OVER()`) |
+| `GET`/`DELETE` | `/v1/media/assets/:id` | Owner / Admin | Fetch metadata or delete from R2 + DB + event-driven purge (`DELETE` in `20/min` write tier) |
 
 ### Links Service (`/v1/links`) & Aggregate Health (`/health`)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/links/v1/graphql` | Anonymous / JWT | Hasura GraphQL endpoint (allow-listed, `limit: 100` capped) |
+| `POST` | `/v1/links/graphql`, `/v1/links/v1/graphql` | Anonymous / JWT | Hasura GraphQL endpoint (allow-listed, `limit: 100` capped, `256KB` body cap, admin routes/headers blocked at gateway) |
 | `GET` | `/v1/links/healthz` | Public | Hasura health probe |
-| `GET`/`HEAD` | `/health` | Public | Coalesced concurrent aggregate health across Core, Media, Hasura |
+| `GET`/`HEAD` | `/health` | Public | 2s coalesced aggregate health across Core, Media, Hasura (sanitized, no internal URLs) |
 
 ---
 

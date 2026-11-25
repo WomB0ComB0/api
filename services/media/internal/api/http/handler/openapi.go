@@ -79,30 +79,40 @@ func OpenAPISpec(w http.ResponseWriter, _ *http.Request) {
 			"/sign": map[string]any{
 				"post": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Sign private CDN URL",
+					"summary":  "Sign private/* CDN URL (HMAC-SHA256)",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
-						"200": map[string]any{"description": "Signed CDN URL generated"},
+						"200": map[string]any{"description": "Signed private CDN URL generated"},
+						"400": map[string]any{"description": "Non-private asset/key, invalid TTL, or unsafe object key"},
+						"401": map[string]any{"description": "Unauthorized"},
+						"403": map[string]any{"description": "Forbidden"},
+						"429": map[string]any{"description": "Rate limit exceeded"},
 					},
 				},
 			},
 			"/purge": map[string]any{
 				"post": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Purge Cloudflare CDN cache",
+					"summary":  "Purge Cloudflare CDN cache (owner-scoped or admin)",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
 						"200": map[string]any{"description": "Cache purged"},
+						"400": map[string]any{"description": "Invalid CDN URL or path traversal"},
+						"403": map[string]any{"description": "Forbidden to purge another user's assets"},
+						"429": map[string]any{"description": "Rate limit exceeded (20/min write tier)"},
+						"503": map[string]any{"description": "Cloudflare zone purge not configured"},
 					},
 				},
 			},
 			"/assets": map[string]any{
 				"get": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "List user assets",
+					"summary":  "List user assets (limit <= 100, offset <= 10000)",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
 						"200": map[string]any{"description": "Paginated asset list"},
+						"400": map[string]any{"description": "Offset exceeds 10000"},
+						"401": map[string]any{"description": "Unauthorized"},
 					},
 				},
 			},
@@ -113,16 +123,19 @@ func OpenAPISpec(w http.ResponseWriter, _ *http.Request) {
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
 						"200": map[string]any{"description": "Asset metadata"},
+						"403": map[string]any{"description": "Forbidden"},
 						"404": map[string]any{"description": "Asset not found"},
 					},
 				},
 				"delete": map[string]any{
 					"tags":     []string{"media"},
-					"summary":  "Delete asset by UUID",
+					"summary":  "Delete asset by UUID (R2 + DB + event-driven cache purge; 20/min write tier)",
 					"security": []map[string][]string{{"bearerAuth": {}}},
 					"responses": map[string]any{
 						"204": map[string]any{"description": "Asset deleted"},
+						"403": map[string]any{"description": "Forbidden"},
 						"404": map[string]any{"description": "Asset not found"},
+						"429": map[string]any{"description": "Rate limit exceeded"},
 					},
 				},
 			},

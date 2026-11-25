@@ -51,7 +51,7 @@
               "name": "How do I authenticate with api.mikeodnis.dev?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Authenticate with POST /v1/core/auth/login to receive a short-lived HS256 Bearer JWT (with Hasura claims) and rotating refresh token, or mint scoped mk_live_* API keys via POST /v1/core/auth/api-keys and pass them in the X-API-Key header."
+                "text": "Authenticate with POST /v1/core/auth/login to receive a short-lived HS256 Bearer JWT (with Hasura claims and mandatory exp) and single-use rotating refresh token, or mint scoped mk_live_* API keys via POST /v1/core/auth/api-keys (Bearer JWT required) and pass them in X-API-Key."
               }
             },
             {
@@ -59,7 +59,7 @@
               "name": "Where are the interactive OpenAPI specs?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Unified interactive docs covering both Core API and Media API are available at https://api.mikeodnis.dev/docs. Raw schemas are served at /v1/core/openapi.json and /v1/media/openapi.json."
+                "text": "Unified interactive docs covering Core API, Media API, and CDN Edge API are available at https://api.mikeodnis.dev/docs. Raw schemas are served at /v1/core/openapi.json, /v1/media/openapi.json, and https://cdn.mikeodnis.dev/openapi.yaml."
               }
             },
             {
@@ -67,7 +67,7 @@
               "name": "What rate limits apply to api.mikeodnis.dev?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Core enforces 10 req/min on auth endpoints, 15 req/min on API key mutations, 30 req/min on writes, and 100 req/min on reads backed by Upstash Redis. Media enforces 120 req/min per IP and 20 writes / 100 reads per minute per user, emitting standard IETF RateLimit-* headers."
+                "text": "Core enforces 10 req/min on auth endpoints (IP-only), 20 req/min on API key management (JWT/IP), 30 req/min on writes, and 100 req/min on reads backed by Upstash Redis with dual IP+API-key protection. Media enforces 120 req/min per IP and 20 writes (upload, presign, confirm, purge, delete) / 100 reads per minute per user, emitting standard IETF RateLimit-* headers."
               }
             }
           ]
@@ -260,7 +260,7 @@
               scoped <code>mk_live_*</code> API keys, Cloudflare R2 media uploads, distributed Upstash Redis rate limiting, and OpenTelemetry tracing.
             </p>
             <div class="actions">
-              <a class="btn btn-brand" href="/docs">Unified API Docs (Core + Media) →</a>
+              <a class="btn btn-brand" href="/docs">Unified API Docs (Core + Media + CDN) →</a>
               <a class="btn" href="/v1/core/docs">Core Docs</a>
               <a class="btn" href="https://cdn.mikeodnis.dev/upload">CDN Upload Studio</a>
               <a class="btn" href="/llms.txt">llms.txt</a>
@@ -282,12 +282,12 @@
         <div class="tile">
           <div class="label-mono">Go · Chi</div>
           <div class="stat-val"><code>/v1/media</code></div>
-          <div class="stat-sub">R2 multipart &amp; presigned uploads, HMAC URL signing, edge purge</div>
+          <div class="stat-sub">Magic-byte &amp; SVG verified uploads, quarantined <code>staging/*</code> presign, HMAC signing</div>
         </div>
         <div class="tile">
           <div class="label-mono">Hasura GraphQL</div>
           <div class="stat-val"><code>/v1/links/graphql</code></div>
-          <div class="stat-sub">Short-link persistence and analytics backing links.mikeodnis.dev</div>
+          <div class="stat-sub">Allow-listed short-link GraphQL (256 KB cap, admin routes blocked at gateway)</div>
         </div>
         <div class="tile">
           <div class="label-mono">Observability</div>
@@ -310,12 +310,12 @@
               </tr>
             </thead>
             <tbody>
-              <tr><td>Core</td><td><span class="badge">auth</span></td><td>10 req / 60s</td><td>Client IP (login, register, refresh)</td></tr>
-              <tr><td>Core</td><td><span class="badge">auth-keys</span></td><td>15 req / 60s</td><td>User ID / API key hash / IP</td></tr>
-              <tr><td>Core</td><td><span class="badge">write</span></td><td>30 req / 60s</td><td>User ID / API key hash / IP</td></tr>
-              <tr><td>Core</td><td><span class="badge">read</span></td><td>100 req / 60s</td><td>User ID / API key hash / IP</td></tr>
-              <tr><td>Media</td><td><span class="badge">media-write</span></td><td>20 req / 60s</td><td>Authenticated User ID (120/min IP ceiling)</td></tr>
-              <tr><td>Media</td><td><span class="badge">media-read</span></td><td>100 req / 60s</td><td>Authenticated User ID (120/min IP ceiling)</td></tr>
+              <tr><td>Core</td><td><span class="badge">auth</span></td><td>10 req / 60s</td><td>Trusted Client IP (login, register, refresh, logout)</td></tr>
+              <tr><td>Core</td><td><span class="badge">auth-keys</span></td><td>20 req / 60s</td><td>Verified JWT User / Trusted IP (JWT-only)</td></tr>
+              <tr><td>Core</td><td><span class="badge">write</span></td><td>30 req / 60s</td><td>Verified JWT User / Dual IP + API key / IP</td></tr>
+              <tr><td>Core</td><td><span class="badge">read</span></td><td>100 req / 60s</td><td>Verified JWT User / Dual IP + API key / IP</td></tr>
+              <tr><td>Media</td><td><span class="badge">media-write</span></td><td>20 req / 60s</td><td>User ID (upload, presign, confirm, purge, delete; 120/min IP ceiling)</td></tr>
+              <tr><td>Media</td><td><span class="badge">media-read</span></td><td>100 req / 60s</td><td>User ID (list, get, sign; 120/min IP ceiling)</td></tr>
             </tbody>
           </table>
         </div>
@@ -341,7 +341,7 @@ curl -sS -X POST https://api.mikeodnis.dev/v1/media/upload \
           <p>Machine-readable contracts for SDKs, AI agents, and security researchers:</p>
           <table>
             <tbody>
-              <tr><td><a href="/docs"><code>/docs</code></a></td><td>Unified Scalar UI (Core + Media)</td></tr>
+              <tr><td><a href="/docs"><code>/docs</code></a></td><td>Unified Scalar UI (Core + Media + CDN)</td></tr>
               <tr><td><a href="/v1/core/openapi.json"><code>/v1/core/openapi.json</code></a></td><td>Core API OpenAPI 3.1 JSON</td></tr>
               <tr><td><a href="/v1/media/openapi.json"><code>/v1/media/openapi.json</code></a></td><td>Media API OpenAPI 3.0 JSON</td></tr>
               <tr><td><a href="/llms.txt"><code>/llms.txt</code></a> &amp; <a href="/llms-full.txt"><code>/llms-full.txt</code></a></td><td>LLM &amp; AEO Markdown guides</td></tr>

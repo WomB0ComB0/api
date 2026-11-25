@@ -4,31 +4,30 @@
 
 ```mermaid
 flowchart TB
-    Users["Browsers / Next.js / CLI"]
+    Users["Browsers / Next.js / Upload Studio PWA / Desktop CLI"]
+
+    subgraph Railway["Railway Production Mesh"]
+        GW["Gateway: Caddy 2.11 (trusted_proxies_strict, fail-closed routing)"]
+        Core["core-service :3000 (Bun + Elysia + Upstash Redis)"]
+        Media["media-service :8080 (Go 1.26 Hexagonal)"]
+        Hasura["hasura :8080 (GraphQL — gateway allowlisted)"]
+        Health["health-aggregator :8000 (Python 3.12, 2s coalesced)"]
+        PG[("PostgreSQL 16")]
+    end
 
     subgraph Cloudflare["Cloudflare Edge"]
-        WAF["Cloudflare DNS + WAF"]
-        CDN["cdn.mikeodnis.dev Worker (wrangler.jsonc)"]
+        CDN["cdn-worker (Cloudflare Worker — cdn.mikeodnis.dev)"]
         R2[("Cloudflare R2 (mikeodnis-cdn)")]
     end
 
-    subgraph Platform["api.mikeodnis.dev"]
-        GW["Gateway: Traefik (VPS) or Caddy (Railway/Fly)"]
-        Core["core-service :3000 (Bun + Elysia)"]
-        Media["media-service :8080 (Go Hexagonal)"]
-        Hasura["hasura :8080 (GraphQL v2.43)"]
-        Health["health-aggregator :8000 (Python 3.12)"]
-        PG[("PostgreSQL 16")]
-        Jaeger["OTel Collector -> Jaeger :16686"]
-    end
-
-    Users --> WAF --> GW
-    Users --> CDN --> R2
+    Users -->|"api.mikeodnis.dev"| GW
+    Users -->|"cdn.mikeodnis.dev (via Caddy or CF DNS)"| GW
+    GW -->|"X-Gateway-Proxy-Secret + X-Gateway-Client-IP"| CDN
+    CDN --> R2
     GW --> Core & Media & Hasura & Health
     Core & Media & Hasura --> PG
-    Media --> R2
+    Media -->|"assets/*, private/*, staging/*"| R2
     Media -.->|"Purge API"| Cloudflare
-    Core & Media -.-> Jaeger
 ```
 
 ---
@@ -37,14 +36,24 @@ flowchart TB
 
 | Shared Primitive | Owner | Consumers | Contract |
 | :--- | :--- | :--- | :--- |
-| `JWT_SECRET` (HS256, ≥32B) | `core-service` issues | `core-service`, `media-service`, `hasura` | JWT contains `sub`, `email`, `role`, and `https://hasura.io/jwt/claims` |
-| `SIGNING_SECRET` (≥32B) | `media-service` signs | `cdn-worker` verifies | `HMAC-SHA256("<path>:<unix_exp>")` encoded as unpadded Base64URL, compared in constant time |
-| Public R2 Prefix | `media-service` writes | `cdn-worker` serves | Key `assets/<user_id>/<hash><ext>` → `https://cdn.mikeodnis.dev/assets/...` (`immutable`, 1y TTL) |
-| Private R2 Prefix | `media-service` writes | `cdn-worker` serves | Key `private/<user_id>/<hash><ext>` → `https://cdn.mikeodnis.dev/private/...?exp=<ts>&sig=<mac>` (`private`, 1h TTL) |
+| `JWT_SECRET` (HS256, ≥32B) | `core-service` issues | `core-service`, `media-service`, `hasura` | Mandatory `exp` claim; includes `sub`, `email`, `role`, and `https://hasura.io/jwt/claims` |
+| `SIGNING_SECRET` (≥32B) | `media-service` signs | `cdn-worker` verifies | `HMAC-SHA256("<path>:<unix_exp>")` as unpadded Base64URL, constant-time verified |
+| `GATEWAY_PROXY_SECRET` (32B) | `gateway` (Caddy) injects | `cdn-worker` verifies | Constant-time matched via `X-Gateway-Proxy-Secret` so `X-Gateway-Client-IP` gives per-visitor CDN rate limiting behind Railway |
+| Public R2 Prefix | `media-service` writes | `cdn-worker` serves | `assets/<user_id>/<hash><ext>` → `https://cdn.mikeodnis.dev/assets/...` (`immutable`, 1y TTL; SVGs sandboxed with strict CSP) |
+| Private R2 Prefix | `media-service` writes | `cdn-worker` serves | `private/<user_id>/<hash><ext>` → `?exp=<ts>&sig=<mac>` (`private, no-store`, `CDN-Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex, nofollow`) |
+| Staging R2 Prefix | `media-service` presigns | **Blocked at CDN** | `staging/<user_id>/...` is non-servable; promoted via ETag-pinned `CopyObject` (`CopySourceIfMatch`) after magic-byte + SVG verification, then deleted |
 
 ---
 
-## 3. Go Media Service — Hexagonal Layer Rules
+## 3. Edge Gateway Hardening (`services/gateway`)
+
+- **Strict Client IP Extraction:** Caddy 2.11 configures `trusted_proxies_strict` so downstream services extract client IPs right-to-left without trusting spoofed `X-Forwarded-For` prefixes.
+- **Fail-Closed Hasura Allowlist:** Only `/v1/links/graphql`, `/v1/links/v1/graphql`, and `/v1/links/healthz` are proxied; `X-Hasura-Admin-Secret` and `X-Hasura-Access-Key` are stripped at ingress; GraphQL payloads are capped at `256KB`; admin/metadata/console endpoints (`/v1/metadata`, `/v1/query`, `/v2/query`, `/console`, `/v1/version`) are blocked.
+- **Per-Visitor CDN Isolation:** When `cdn.mikeodnis.dev` routes through Caddy, the gateway forwards `X-Gateway-Proxy-Secret` and `X-Gateway-Client-IP` so each visitor gets an isolated Cloudflare rate-limit bucket (seamlessly falling back to `CF-Connecting-IP` when proxied directly by Cloudflare).
+
+---
+
+## 4. Go Media Service — Hexagonal Layer Rules
 
 Enforced automatically by [architecture_test.go](file:///home/wombocombo/github/prs/api/services/media/architecture_test.go):
 
@@ -59,7 +68,7 @@ Enforced automatically by [architecture_test.go](file:///home/wombocombo/github/
 ```mermaid
 flowchart TD
     Main["cmd/server/main.go (Composition Root)"]
-    API["internal/api/http (Chi Router, JWT Middleware, Thin Handlers)"]
+    API["internal/api/http (Chi Router, JWT + RateLimit Middleware, Thin Handlers)"]
     App["internal/application (Factory + Use Cases)"]
     Dom["internal/domain (Asset Aggregate, Value Objects, EventBus, Ports)"]
     Adp["internal/adapter (Postgres pgx, Cloudflare R2, URLSigner, CachePurger, OTel)"]
@@ -73,18 +82,23 @@ flowchart TD
     Adp --> Dom
 ```
 
----
-
-## 4. Core Service — Elysia Best Practices
-
-- **Feature Modules**: `src/modules/{utility,health,auth,users}` each separate `model.ts` (TypeBox `t` schemas + `UnwrapSchema`), `service.ts` (pure business logic decoupled from Elysia `Context`), and `index.ts` (Elysia controller).
-- **Macros**: Named, scoped macros (`auth: true`, `admin: true`) in `src/plugins/auth.ts` eliminate repetitive guard checks and propagate non-null `authUser` types and OpenAPI security requirements automatically.
-- **Typed Responses**: Every route uses `return status(code, payload)` with explicit response schemas for end-to-end **Eden Treaty** (`@elysiajs/eden`) type safety and OpenAPI 3.1 generation.
-- **Production Binary**: Built via `bun build --compile --minify-whitespace --minify-syntax --target bun --external pg` (retaining function names for OpenTelemetry spans and keeping `pg` external for DB auto-instrumentation).
+Key security invariants in Media Service:
+- 513-byte UTF-8 sniff sentinel + magic-byte validation + active-content SVG sanitization on both direct uploads and staged confirms.
+- Strict `ValidateObjectKeySafety` on `SignURL` (`private/*` only) and `ConfirmUpload` (`staging/<user_id>/*` only).
+- 2-second coalesced `/health/ready` probe cache, `nosniff` + `no-store` error parity, and `DELETE /assets/{id}` enforced under the `20/min` write tier.
 
 ---
 
-## 5. N+1-Free Query Architecture
+## 5. Core Service — Elysia Best Practices
+
+- **Feature Modules:** `src/modules/{utility,health,auth,users}` separate `model.ts` (TypeBox `t` schemas + `UnwrapSchema`), `service.ts` (pure business logic decoupled from Elysia `Context`), and `index.ts` (Elysia controller).
+- **Macros & Auth:** Named, scoped macros (`auth: true`, `admin: true`) in `src/plugins/auth.ts` enforce mandatory JWT `exp`, `read`-scope enforcement on API keys, and JWT-only mutations/admin access.
+- **Security Headers & Rate Limits:** Global `onRequest` security headers + `Cache-Control: no-store` on all `2xx`/`4xx`/`5xx`, distributed Upstash Redis rate limiting with dual IP + API-key buckets, and 2-second coalesced `/health/ready`.
+- **Production Binary:** Built with `bun install --frozen-lockfile` and `bun build --compile --minify-whitespace --minify-syntax --target bun --external pg`.
+
+---
+
+## 6. N+1-Free Query Architecture
 
 | Operation | Service | Query Pattern | DB Roundtrips |
 | :--- | :--- | :--- | :---: |
@@ -93,6 +107,6 @@ flowchart TD
 | API key authentication | Core | Single atomic `UPDATE core.api_keys ... FROM core.users ... RETURNING` | **1** |
 | List users (paginated + total) | Core | Single `SELECT ..., COUNT(*) OVER()` using `idx_users_created_at` | **1** |
 | List API keys | Core | Single `SELECT` using partial index `idx_api_keys_user_active` | **1** |
-| List media assets (paginated + total) | Media | Single `SELECT ..., COUNT(*) OVER()` using `idx_assets_user_created` | **1** |
+| List media assets (paginated + total) | Media | Single `SELECT ..., COUNT(*) OVER()` using `idx_assets_user_created` (`offset <= 10000`) | **1** |
 | Batch lookup media assets | Media | Single `SELECT ... WHERE id = ANY($1::uuid[])` | **1** |
 | Links & click analytics | Hasura | Single compiled lateral-join SQL query using `idx_links_user_created` & `idx_clicks_link_clicked` | **1** |

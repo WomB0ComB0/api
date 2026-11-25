@@ -3,17 +3,20 @@
 ## URLs
 
 ### Development
-- API Gateway: http://localhost
-- Traefik Dashboard: http://localhost:8080
-- Core API Docs: http://localhost/v1/core/docs
-- Hasura Console: http://localhost:8080/console
+- API Gateway: `http://localhost`
+- Unified API Docs: `http://localhost/docs`
+- Core OpenAPI Docs: `http://localhost/v1/core/docs`
+- Traefik Dashboard: `http://localhost:8080`
 
 ### Production
-- API Gateway: https://api.mikeodnis.dev
-- Core API: https://api.mikeodnis.dev/v1/core
-- Media API: https://api.mikeodnis.dev/v1/media
-- Links GraphQL: https://api.mikeodnis.dev/v1/links/graphql
-- CDN: https://cdn.mikeodnis.dev
+- API Gateway & Live Console: `https://api.mikeodnis.dev`
+- Unified OpenAPI Docs (Core + Media + CDN): `https://api.mikeodnis.dev/docs`
+- LLM Discovery: `https://api.mikeodnis.dev/llms.txt` & `https://api.mikeodnis.dev/llms-full.txt`
+- Core API: `https://api.mikeodnis.dev/v1/core`
+- Media API: `https://api.mikeodnis.dev/v1/media`
+- Links GraphQL: `https://api.mikeodnis.dev/v1/links/graphql`
+- Aggregate Health: `https://api.mikeodnis.dev/health`
+- CDN Edge & Upload Studio PWA: `https://cdn.mikeodnis.dev` (`https://cdn.mikeodnis.dev/upload`)
 
 ## Common Tasks
 
@@ -29,13 +32,13 @@ make restart      # Restart all services
 make logs              # All services
 make logs-core         # Core service only
 make logs-media        # Media service only
-docker-compose logs -f # Follow all logs
+docker compose logs -f # Follow all logs
 ```
 
 ### Database
 ```bash
-make db-shell          # Open PostgreSQL shell
-make db-backup         # Create backup
+make db-shell                    # Open PostgreSQL shell
+make db-backup                   # Create backup (umask 077)
 make db-restore FILE=backup.sql  # Restore from backup
 ```
 
@@ -47,63 +50,80 @@ make scale-media N=2   # Run 2 media service instances
 
 ### Health Checks
 ```bash
-make health                              # All services
-curl http://localhost/health             # Aggregate health
-curl http://localhost/v1/core/health     # Core service
-curl http://localhost/v1/media/health    # Media service
+make health                                   # All services
+curl -sS https://api.mikeodnis.dev/health     # Aggregate health (2s coalesced)
+curl -sS https://api.mikeodnis.dev/v1/core/health/ready
+curl -sS https://api.mikeodnis.dev/v1/media/health/ready
+curl -sS https://cdn.mikeodnis.dev/health
 ```
 
 ### Testing
 ```bash
-make test                    # Run all tests
-cd services/core && npm test # Test core service
-cd services/media && go test # Test media service
-./scripts/test-api.sh        # Integration tests
+make test                                        # Run all tests
+(cd services/core && bun test)                   # Test Core service (Bun + Elysia)
+(cd services/media && go vet ./... && go test -race ./...) # Test Media service (Go)
+./scripts/test-api.sh                            # Integration tests
 ```
 
 ## API Examples
 
-### Create User (Core API)
+### Login & Capture JWT (Core API)
 ```bash
-curl -X POST http://localhost/v1/core/users \
-  -H "Authorization: Bearer $TOKEN" \
+TOKEN=$(curl -fsS -X POST https://api.mikeodnis.dev/v1/core/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","name":"John Doe"}'
+  -d '{"email":"user@example.com","password":"StrongPassword123!"}' | jq -r '.access_token')
 ```
 
 ### Upload File (Media API)
 ```bash
-curl -X POST http://localhost/v1/media/upload \
+curl -fsS -X POST https://api.mikeodnis.dev/v1/media/upload \
   -H "Authorization: Bearer $TOKEN" \
+  -F "visibility=public" \
   -F "file=@image.jpg"
+```
+
+### Mint Signed URL for Private Asset (Media API)
+```bash
+curl -fsS -X POST https://api.mikeodnis.dev/v1/media/sign \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"asset_id":"<uuid>","expires_in":120}'
 ```
 
 ### GraphQL Query (Links)
 ```bash
-curl -X POST http://localhost/v1/links/graphql \
+curl -fsS -X POST https://api.mikeodnis.dev/v1/links/graphql \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "query { links_links { id slug target_url } }"
-  }'
+  -d '{"query":"query { links_links { id slug target_url } }"}'
 ```
 
 ## Environment Variables
 
-### Essential
+### Essential Shared Secrets
 ```bash
-JWT_SECRET=xxx                      # JWT signing secret
-HASURA_GRAPHQL_ADMIN_SECRET=xxx    # Hasura admin access
-DATABASE_URL=postgresql://...       # Database connection
+JWT_SECRET=...                      # >=32B HS256 secret (Core + Media + Hasura)
+SIGNING_SECRET=...                  # >=32B HMAC secret (Media + CDN Worker)
+GATEWAY_PROXY_SECRET=...            # 32B secret (Railway Gateway + CDN Worker)
+HASURA_GRAPHQL_ADMIN_SECRET=...     # Hasura admin secret (blocked at gateway)
+DATABASE_URL=postgresql://...       # PostgreSQL 16 connection string
 ```
 
-### Cloudflare R2
+### Distributed Rate Limiting (Core — Upstash Redis)
 ```bash
-CLOUDFLARE_R2_ACCOUNT_ID=xxx
-CLOUDFLARE_R2_ACCESS_KEY_ID=xxx
-CLOUDFLARE_R2_SECRET_ACCESS_KEY=xxx
-CLOUDFLARE_R2_BUCKET=xxx
+UPSTASH_REDIS_REST_URL=https://...
+UPSTASH_REDIS_REST_TOKEN=...
+```
+
+### Cloudflare R2 & Purge (Media)
+```bash
+CLOUDFLARE_R2_ACCOUNT_ID=...
+CLOUDFLARE_R2_ACCESS_KEY_ID=...
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=...
+CLOUDFLARE_R2_BUCKET=mikeodnis-cdn
 CLOUDFLARE_R2_PUBLIC_URL=https://cdn.mikeodnis.dev
+CLOUDFLARE_ZONE_ID=...
+CLOUDFLARE_API_TOKEN=...
 ```
 
 ### Monitoring (Optional — Axiom / OTLP)
@@ -112,59 +132,22 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://us-east-1.aws.edge.axiom.co
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer xaat-...,X-Axiom-Dataset=api-mikeodnis-dev-traces"
 ```
 
-## Troubleshooting
-
-### Services won't start
-```bash
-# Check logs
-make logs
-
-# Verify network
-docker network ls
-docker network inspect api_api-network
-```
-
-### Database connection issues
-```bash
-# Test connection
-make db-shell
-
-# Restart PostgreSQL
-docker-compose restart postgres
-```
-
-### Port conflicts
-```bash
-# Check what's using port 80
-sudo lsof -i :80
-
-# Change ports in docker-compose.yml
-# ports:
-#   - "8000:80"  # Use 8000 instead of 80
-```
-
-### SSL/Certificate issues
-```bash
-# Remove old certificates
-rm -rf letsencrypt/acme.json
-chmod 600 letsencrypt/acme.json
-docker-compose restart traefik
-```
-
 ## File Structure
-```
+
+```text
 api/
 ├── services/
-│   ├── core/          # Node.js service
-│   ├── media/         # Go service
-│   └── health/        # Python aggregator
+│   ├── gateway/       # Caddy 2.11 edge proxy, Live Console, Scalar /docs, llms.txt
+│   ├── core/          # Bun + ElysiaJS auth, users, API keys, Upstash Redis rate limiter
+│   ├── media/         # Go 1.26 hexagonal media service (R2, HMAC sign, purge)
+│   └── health/        # Python 3.12 health aggregator
 ├── database/
-│   └── init/          # Database schemas
+│   └── init/          # PostgreSQL 16 schemas & indexes
 ├── hasura/
-│   └── metadata/      # GraphQL config
+│   └── metadata/      # GraphQL metadata & permissions
 ├── traefik/
-│   └── dynamic/       # Gateway config
-├── scripts/           # Utility scripts
+│   └── dynamic/       # Optional VPS Traefik config
+├── scripts/           # Utility, DB backup, and test scripts
 ├── docs/              # Documentation
 ├── docker-compose.yml
 ├── Makefile
@@ -173,34 +156,16 @@ api/
 
 ## Security Checklist
 
-- [ ] Change default passwords in `.env`
-- [ ] Configure Cloudflare proxy for DDoS protection
-- [ ] Enable firewall (ports 80, 443 only)
-- [ ] Rotate JWT secrets regularly
-- [ ] Keep dependencies updated
-- [ ] Review logs for suspicious activity
-- [ ] Enable 2FA on all cloud accounts
-
-## Performance Tips
-
-### Database
-- Add indexes for frequently queried columns
-- Use connection pooling (already configured)
-- Monitor slow queries
-
-### Caching
-- Configure Hasura query caching
-- Add Redis for session storage
-- Use CDN for static assets
-
-### Scaling
-- Scale services independently
-- Use read replicas for database
-- Deploy to multiple regions
+- [ ] Provision unique ≥32-byte `JWT_SECRET`, `SIGNING_SECRET`, `GATEWAY_PROXY_SECRET`, and `HASURA_GRAPHQL_ADMIN_SECRET`
+- [ ] Keep `GATEWAY_PROXY_SECRET` synced between Railway `gateway` and Cloudflare `cdn-worker`
+- [ ] Verify Hasura admin paths (`/v1/metadata`, `/v1/query`, `/console`) return `403`/`404` through gateway
+- [ ] Keep dependencies updated and run `bun install --frozen-lockfile` / `go test -race ./...`
+- [ ] Run DB backups with `umask 077` (built into `scripts/backup-db.sh`)
+- [ ] Enable 2FA on Railway, Cloudflare, and GitHub accounts
 
 ## Links
 
-- [Full API Documentation](docs/API.md)
-- [Deployment Guide](docs/DEPLOYMENT.md)
-- [Architecture Details](docs/ARCHITECTURE.md)
-- [Contributing Guide](CONTRIBUTING.md)
+- [Full API Documentation](API.md)
+- [Deployment Guide](DEPLOYMENT.md)
+- [Architecture Details](ARCHITECTURE.md)
+- [Contributing Guide](../CONTRIBUTING.md)
