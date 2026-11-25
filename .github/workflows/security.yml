@@ -84,3 +84,31 @@ jobs:
             exit 1
           fi
           echo "No committed .env or key files found."
+
+  notify-heartbeat:
+    name: Better Stack Heartbeat
+    needs: [audit-core, audit-media, audit-workflows, secret-scan]
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Better Stack security audit heartbeat
+        env:
+          HEARTBEAT_URL: ${{ secrets.BETTERSTACK_SECURITY_HEARTBEAT_URL }}
+          AUDIT_CORE: ${{ needs.audit-core.result }}
+          AUDIT_MEDIA: ${{ needs.audit-media.result }}
+          AUDIT_WORKFLOWS: ${{ needs.audit-workflows.result }}
+          SECRET_SCAN: ${{ needs.secret-scan.result }}
+        run: |
+          if [ -z "$HEARTBEAT_URL" ]; then
+            echo "BETTERSTACK_SECURITY_HEARTBEAT_URL secret not set; skipping heartbeat ping."
+            exit 0
+          fi
+          if [ "$AUDIT_CORE" = "success" ] && [ "$AUDIT_MEDIA" = "success" ] && [ "$AUDIT_WORKFLOWS" = "success" ] && [ "$SECRET_SCAN" = "success" ]; then
+            curl -fsS --max-time 10 "${HEARTBEAT_URL%/}" > /dev/null
+            echo "Success heartbeat reported to Better Stack."
+          else
+            curl -fsS --max-time 10 "${HEARTBEAT_URL%/}/fail" > /dev/null || true
+            echo "Failure heartbeat reported to Better Stack."
+            exit 1
+          fi
