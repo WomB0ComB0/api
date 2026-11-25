@@ -1,10 +1,13 @@
 package model
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
 	"html"
+	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -34,7 +37,15 @@ const (
 	FileTypeText  FileType = "text"
 )
 
-const MaxSVGBytes int64 = 2 << 20 // 2 MiB ceiling for SVG active-content scanning
+const (
+	MaxSVGBytes     int64 = 2 << 20  // 2 MiB ceiling for SVG active-content scanning
+	MaxPDFScanBytes int64 = 16 << 20 // 16 MiB window for PDF active-content scanning
+	MaxZIPBytes     int64 = 32 << 20 // 32 MiB ceiling for full ZIP central-directory inspection
+
+	maxZIPEntries          = 2000
+	maxZIPUncompressedSize = 512 << 20 // 512 MiB total uncompressed ceiling (zip-bomb guard)
+	maxZIPCompressionRatio = 100
+)
 
 type typeSpec struct {
 	extensions    []string
@@ -69,9 +80,20 @@ var extToCanonicalTextMIME = map[string]string{
 }
 
 var (
-	svgOpeningRe = regexp.MustCompile(`(?is)^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!DOCTYPE\s+svg[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg\b`)
-	svgActiveRe  = regexp.MustCompile(`(?i)<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|animate|animatemotion|animatetransform|set|handler)\b|<!\s*entity\b|<!\s*doctype\s+[^>]+\[|\bon[a-z]{2,32}\s*=|(?:javascript|vbscript)\s*:|data\s*:\s*(?:text/html|image/svg\+xml)|<\s*use\b[^>]*\b(?:xlink:)?href\s*=\s*["']?\s*(?:https?:|//|data:)|@import\b|expression\s*\(`)
-	htmlPrefixRe = regexp.MustCompile(`(?i)^\s*(?:<!doctype\s+html|<html\b|<script\b|<iframe\b|<\?php\b)`)
+	svgOpeningRe    = regexp.MustCompile(`(?is)^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!DOCTYPE\s+svg[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg\b`)
+	svgActiveRe     = regexp.MustCompile(`(?i)<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|animate|animatemotion|animatetransform|set|handler)\b|<!\s*entity\b|<!\s*doctype\s+[^>]+\[|\bon[a-z]{2,32}\s*=|(?:javascript|vbscript)\s*:|data\s*:\s*(?:text/html|image/svg\+xml)|<\s*use\b[^>]*\b(?:xlink:)?href\s*=\s*["']?\s*(?:https?:|//|data:)|@import\b|expression\s*\(`)
+	htmlPrefixRe    = regexp.MustCompile(`(?i)^\s*(?:<!doctype\s+html|<html\b|<script\b|<iframe\b|<\?php\b)`)
+	pdfNameHexRe    = regexp.MustCompile(`#([0-9a-fA-F]{2})`)
+	pdfActiveObjRe  = regexp.MustCompile(`/(?:JavaScript|JS|Launch|OpenAction|AA|EmbeddedFile|RichMedia|XFA|SubmitForm|ImportData|GoToR|GoToE|Rendition|Sound|Movie)\b`)
+	pdfPolyglotRe   = regexp.MustCompile(`(?i)(?:<\s*script\b|<!doctype\s+html\b|<\?php\b)`)
+	zipDoubleExtRe  = regexp.MustCompile(`(?i)\.(?:pdf|epub|doc|docx|xls|xlsx|ppt|pptx|jpg|jpeg|png|gif|txt|md|csv)\.(?:exe|scr|bat|cmd|vbs|vbe|js|jse|ps1|msi|hta|lnk|jar|apk|sh)$`)
+	zipDangerousExt = map[string]struct{}{
+		".exe": {}, ".dll": {}, ".scr": {}, ".bat": {}, ".cmd": {}, ".com": {}, ".pif": {},
+		".vbs": {}, ".vbe": {}, ".js": {}, ".jse": {}, ".wsf": {}, ".wsh": {}, ".ps1": {},
+		".psm1": {}, ".msi": {}, ".msp": {}, ".sh": {}, ".bash": {}, ".zsh": {}, ".hta": {},
+		".lnk": {}, ".chm": {}, ".jar": {}, ".apk": {}, ".dmg": {}, ".iso": {}, ".img": {},
+		".docm": {}, ".xlsm": {}, ".pptm": {},
+	}
 )
 
 var (
@@ -215,6 +237,112 @@ func ValidateSVGContent(data []byte) error {
 	decoded := html.UnescapeString(string(data))
 	if svgActiveRe.MatchString(decoded) {
 		return apperr.Validation("SVG contains disallowed active content after entity decoding")
+	}
+	return nil
+}
+
+// decodePDFHexNames resolves PDF name hex-escapes (e.g. /J#61vaScript -> /JavaScript)
+// so obfuscated PDF action/script dictionary names cannot bypass static inspection.
+func decodePDFHexNames(raw []byte) []byte {
+	return pdfNameHexRe.ReplaceAllFunc(raw, func(match []byte) []byte {
+		v, err := strconv.ParseUint(string(match[1:]), 16, 8)
+		if err != nil {
+			return match
+		}
+		return []byte{byte(v)}
+	})
+}
+
+// ValidatePDFContent rejects PDF files containing active scripting, launch actions,
+// embedded payloads, XFA forms, or HTML/PHP polyglot markers.
+func ValidatePDFContent(data []byte) error {
+	if !hasPrefix(data, []byte("%PDF-")) {
+		return apperr.Validation("PDF file must begin with %PDF- signature")
+	}
+	if match := pdfActiveObjRe.Find(data); match != nil {
+		return apperr.Validation(fmt.Sprintf("PDF contains disallowed active object (%s)", string(match)))
+	}
+	decoded := decodePDFHexNames(data)
+	if match := pdfActiveObjRe.Find(decoded); match != nil {
+		return apperr.Validation(fmt.Sprintf("PDF contains obfuscated active object (%s)", string(match)))
+	}
+	// Check leading header region (first 8 KiB) for HTML/PHP polyglot headers.
+	polyWindow := data
+	if len(polyWindow) > 8192 {
+		polyWindow = polyWindow[:8192]
+	}
+	if pdfPolyglotRe.Match(polyWindow) {
+		return apperr.Validation("PDF contains HTML/script polyglot content")
+	}
+	return nil
+}
+
+// ValidateZIPContent inspects a ZIP archive's central directory without extracting files,
+// blocking zip-slip path traversal, embedded executables/scripts, and decompression bombs.
+func ValidateZIPContent(data []byte) error {
+	if int64(len(data)) > MaxZIPBytes {
+		return apperr.TooLarge("ZIP archive exceeds maximum inspectable size (32 MiB)")
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return apperr.Validation("invalid or corrupted ZIP archive")
+	}
+	if len(reader.File) > maxZIPEntries {
+		return apperr.Validation(fmt.Sprintf("ZIP archive exceeds maximum entry count (%d)", maxZIPEntries))
+	}
+
+	var totalUncompressed uint64
+	var totalCompressed uint64
+	for _, f := range reader.File {
+		name := f.Name
+		if name == "" {
+			continue
+		}
+		// Reject zip-slip traversal, absolute paths, drive prefixes, backslashes, NUL & bidi runes.
+		if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") || strings.Contains(name, "\\") {
+			return apperr.Validation("ZIP archive contains unsafe absolute or backslash path")
+		}
+		if len(name) >= 2 && name[1] == ':' {
+			return apperr.Validation("ZIP archive contains drive-letter path")
+		}
+		for _, r := range name {
+			if r == 0 || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
+				return apperr.Validation("ZIP archive contains control or bidi override character in entry name")
+			}
+		}
+		for _, seg := range strings.Split(name, "/") {
+			if seg == ".." {
+				return apperr.Validation("ZIP archive contains zip-slip path traversal (..)")
+			}
+		}
+
+		if !f.FileInfo().IsDir() {
+			base := strings.ToLower(path.Base(name))
+			if zipDoubleExtRe.MatchString(base) {
+				return apperr.Validation(fmt.Sprintf("ZIP archive contains double-extension spoof (%s)", base))
+			}
+			ext := strings.ToLower(path.Ext(base))
+			if _, blocked := zipDangerousExt[ext]; blocked {
+				return apperr.Validation(fmt.Sprintf("ZIP archive contains disallowed executable/script entry (%s)", ext))
+			}
+		}
+
+		// Accumulate sizes with overflow check.
+		if f.UncompressedSize64 > maxZIPUncompressedSize || totalUncompressed > maxZIPUncompressedSize-f.UncompressedSize64 {
+			return apperr.Validation("ZIP archive exceeds maximum uncompressed size limit (zip-bomb guard)")
+		}
+		totalUncompressed += f.UncompressedSize64
+		totalCompressed += f.CompressedSize64
+	}
+
+	if totalUncompressed > (10 << 20) {
+		compressedFloor := totalCompressed
+		if compressedFloor == 0 {
+			compressedFloor = uint64(len(data))
+		}
+		if compressedFloor == 0 || totalUncompressed/compressedFloor > maxZIPCompressionRatio {
+			return apperr.Validation("ZIP archive exceeds safe compression ratio (zip-bomb guard)")
+		}
 	}
 	return nil
 }

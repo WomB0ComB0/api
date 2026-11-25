@@ -517,6 +517,37 @@ func TestUploadAndConfirmSecurityEnforcement(t *testing.T) {
 			}
 		}
 	}
+
+	// 10. Weaponized PDF (direct upload & presign confirm) must be rejected and purged from staging
+	evilPDF := []byte("%PDF-1.7\n1 0 obj << /OpenAction << /S /J#61vaScript /JS (app.alert(1)) >> >> endobj\n%%EOF\n")
+	if _, err := factory.Upload().Execute(context.Background(), media.UploadInput{
+		Actor:             u1,
+		Filename:          "book.pdf",
+		HeaderContentType: "application/pdf",
+		File:              bytes.NewReader(evilPDF),
+	}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected weaponized PDF direct upload rejection, got %v", err)
+	}
+	prePDF, err := factory.PresignUpload().Execute(context.Background(), media.PresignInput{
+		Actor:       u1,
+		Filename:    "book.pdf",
+		ContentType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("presign pdf failed: %v", err)
+	}
+	store.objects[prePDF.Key] = evilPDF
+	store.types[prePDF.Key] = "application/pdf"
+	if _, err := factory.ConfirmUpload().Execute(context.Background(), media.ConfirmUploadInput{
+		Actor:    u1,
+		Key:      prePDF.Key,
+		Filename: "book.pdf",
+	}); !apperr.IsType(err, apperr.TypeValidation) {
+		t.Fatalf("expected weaponized PDF presign confirm rejection, got %v", err)
+	}
+	if _, stillInStaging := store.objects[prePDF.Key]; stillInStaging {
+		t.Fatalf("rejected PDF must be purged from staging R2")
+	}
 }
 
 type stubSigner struct{}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"archive/zip"
 	"bytes"
 	"testing"
 
@@ -170,5 +171,72 @@ func TestFilenameAndUploadTypeSafety(t *testing.T) {
 	// Presign allowlist blocks mismatched extension <-> MIME
 	if _, err := ValidatePresignContentType(validFn, "image/svg+xml"); !apperr.IsType(err, apperr.TypeValidation) {
 		t.Fatalf("expected presign MIME mismatch rejection, got %v", err)
+	}
+}
+
+func makeTestZIP(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("zip create %q: %v", name, err)
+		}
+		if _, err := w.Write(content); err != nil {
+			t.Fatalf("zip write %q: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestPDFAndZIPActiveContentValidation(t *testing.T) {
+	// Clean minimal PDF passes
+	cleanPDF := []byte("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n%%EOF\n")
+	if err := ValidatePDFContent(cleanPDF); err != nil {
+		t.Fatalf("expected clean PDF to pass, got %v", err)
+	}
+
+	// Malicious PDFs (JS, hex-obfuscated JS, Launch, OpenAction, EmbeddedFile, XFA, HTML polyglot) must be rejected
+	for _, payload := range []string{
+		"%PDF-1.7\n1 0 obj << /JavaScript (app.alert(1)) >> endobj",
+		"%PDF-1.7\n1 0 obj << /J#61vaScript (app.alert(1)) >> endobj",
+		"%PDF-1.7\n1 0 obj << /S /JS /JS (evil) >> endobj",
+		"%PDF-1.7\n1 0 obj << /Type /Action /S /Launch /F (cmd.exe) >> endobj",
+		"%PDF-1.7\n1 0 obj << /OpenAction 3 0 R >> endobj",
+		"%PDF-1.7\n1 0 obj << /AA << /O 4 0 R >> >> endobj",
+		"%PDF-1.7\n1 0 obj << /Type /EmbeddedFile >> endobj",
+		"%PDF-1.7\n1 0 obj << /XFA 5 0 R >> endobj",
+		"%PDF-1.7\n<html><script>alert(1)</script></html>",
+	} {
+		if err := ValidatePDFContent([]byte(payload)); !apperr.IsType(err, apperr.TypeValidation) {
+			t.Fatalf("expected malicious PDF rejection for %q, got %v", payload, err)
+		}
+	}
+
+	// Clean ZIP archive passes
+	cleanZIP := makeTestZIP(t, map[string][]byte{
+		"docs/readme.md": []byte("# Hello"),
+		"notes.txt":      []byte("safe content"),
+	})
+	if err := ValidateZIPContent(cleanZIP); err != nil {
+		t.Fatalf("expected clean ZIP to pass, got %v", err)
+	}
+
+	// Malicious ZIPs: zip-slip traversal, absolute path, embedded executable, double-extension spoof
+	for name, entries := range map[string]map[string][]byte{
+		"zip-slip":   {"../../etc/cron.d/pwn": []byte("bad")},
+		"abs-path":   {"/etc/passwd": []byte("bad")},
+		"executable": {"bin/dropper.exe": []byte("MZ")},
+		"shell":      {"install.sh": []byte("#!/bin/sh\nid")},
+		"double-ext": {"handbook.pdf.js": []byte("alert(1)")},
+	} {
+		z := makeTestZIP(t, entries)
+		if err := ValidateZIPContent(z); !apperr.IsType(err, apperr.TypeValidation) {
+			t.Fatalf("expected malicious ZIP (%s) rejection, got %v", name, err)
+		}
 	}
 }

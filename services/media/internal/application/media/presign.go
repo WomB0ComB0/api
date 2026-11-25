@@ -138,11 +138,23 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		_ = uc.store.DeleteObject(ctx, cleanKey)
 		return nil, apperr.TooLarge("SVG file exceeds maximum allowed size (2 MiB)")
 	}
+	if filename.Ext == ".zip" && meta.Size > model.MaxZIPBytes {
+		_ = uc.store.DeleteObject(ctx, cleanKey)
+		return nil, apperr.TooLarge("ZIP archive exceeds maximum inspectable size (32 MiB)")
+	}
 
-	// Read 512 + 1 sentinel byte for non-SVG objects so split multi-byte UTF-8 runes at byte 512 are recognized.
+	// Read 512 + 1 sentinel byte for non-active formats so split multi-byte UTF-8 runes at byte 512 are recognized.
 	readLimit := int64(513)
-	if filename.Ext == ".svg" {
+	switch filename.Ext {
+	case ".svg":
 		readLimit = model.MaxSVGBytes
+	case ".pdf":
+		readLimit = model.MaxPDFScanBytes
+		if meta.Size < readLimit {
+			readLimit = meta.Size
+		}
+	case ".zip":
+		readLimit = meta.Size
 	}
 	// Pin both ReadObjectHead and CopyObject to meta.ETag (S3 IfMatch / CopySourceIfMatch)
 	// so concurrent PUTs to the staging key during confirmation abort atomically (zero TOCTOU window).
@@ -155,8 +167,19 @@ func (uc *ConfirmUploadUseCase) Execute(ctx context.Context, in ConfirmUploadInp
 		_ = uc.store.DeleteObject(ctx, cleanKey)
 		return nil, err
 	}
-	if filename.Ext == ".svg" {
+	switch filename.Ext {
+	case ".svg":
 		if err := model.ValidateSVGContent(headBytes); err != nil {
+			_ = uc.store.DeleteObject(ctx, cleanKey)
+			return nil, err
+		}
+	case ".pdf":
+		if err := model.ValidatePDFContent(headBytes); err != nil {
+			_ = uc.store.DeleteObject(ctx, cleanKey)
+			return nil, err
+		}
+	case ".zip":
+		if err := model.ValidateZIPContent(headBytes); err != nil {
 			_ = uc.store.DeleteObject(ctx, cleanKey)
 			return nil, err
 		}

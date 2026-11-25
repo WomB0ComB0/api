@@ -69,6 +69,9 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 	if filename.Ext == ".svg" && model.MaxSVGBytes < effectiveMax {
 		effectiveMax = model.MaxSVGBytes
 	}
+	if filename.Ext == ".zip" && model.MaxZIPBytes < effectiveMax {
+		effectiveMax = model.MaxZIPBytes
+	}
 
 	// Read 512 + 1 sentinel byte so DetectFileSignature knows whether a trailing UTF-8 rune was split by truncation.
 	sniffBuf := make([]byte, 513)
@@ -96,6 +99,9 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 		if filename.Ext == ".svg" && totalSize > model.MaxSVGBytes {
 			return nil, apperr.TooLarge("SVG file exceeds maximum allowed size (2 MiB)")
 		}
+		if filename.Ext == ".zip" && totalSize > model.MaxZIPBytes {
+			return nil, apperr.TooLarge("ZIP archive exceeds maximum inspectable size (32 MiB)")
+		}
 		return nil, apperr.TooLarge("file exceeds maximum allowed size")
 	}
 
@@ -118,6 +124,34 @@ func (uc *UploadUseCase) Execute(ctx context.Context, in UploadInput) (*AssetDTO
 			return nil, apperr.System("failed to inspect SVG file", readErr)
 		}
 		if err := model.ValidateSVGContent(svgBytes); err != nil {
+			return nil, err
+		}
+		if _, err := in.File.Seek(0, io.SeekStart); err != nil {
+			return nil, apperr.System("failed to rewind uploaded file", err)
+		}
+	}
+
+	// Scan PDF body (up to 16 MiB window) to reject embedded JS, launch actions, XFA, and polyglots.
+	if filename.Ext == ".pdf" {
+		pdfBytes, readErr := io.ReadAll(io.LimitReader(in.File, model.MaxPDFScanBytes))
+		if readErr != nil {
+			return nil, apperr.System("failed to inspect PDF file", readErr)
+		}
+		if err := model.ValidatePDFContent(pdfBytes); err != nil {
+			return nil, err
+		}
+		if _, err := in.File.Seek(0, io.SeekStart); err != nil {
+			return nil, apperr.System("failed to rewind uploaded file", err)
+		}
+	}
+
+	// Inspect ZIP central directory (up to 32 MiB) to block zip-slip, nested executables, and zip bombs.
+	if filename.Ext == ".zip" {
+		zipBytes, readErr := io.ReadAll(io.LimitReader(in.File, model.MaxZIPBytes+1))
+		if readErr != nil {
+			return nil, apperr.System("failed to inspect ZIP archive", readErr)
+		}
+		if err := model.ValidateZIPContent(zipBytes); err != nil {
 			return nil, err
 		}
 		if _, err := in.File.Seek(0, io.SeekStart); err != nil {
