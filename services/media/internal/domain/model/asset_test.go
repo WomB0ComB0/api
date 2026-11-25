@@ -194,20 +194,19 @@ func makeTestZIP(t *testing.T, files map[string][]byte) []byte {
 }
 
 func TestPDFAndZIPActiveContentValidation(t *testing.T) {
-	// Clean minimal PDF passes
-	cleanPDF := []byte("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n%%EOF\n")
+	// Clean minimal PDF (including benign LaTeX page-jump OpenAction array & binary stream bytes) passes
+	cleanPDF := []byte("%PDF-1.7\n1 0 obj << /Type /Catalog /OpenAction [3 0 R /Fit] /Pages 2 0 R >> endobj\nstream\ncompressed /JS /AA binary data\nendstream\n%%EOF\n")
 	if err := ValidatePDFContent(cleanPDF); err != nil {
 		t.Fatalf("expected clean PDF to pass, got %v", err)
 	}
 
-	// Malicious PDFs (JS, hex-obfuscated JS, Launch, OpenAction, EmbeddedFile, XFA, HTML polyglot) must be rejected
+	// Malicious PDFs (JS, hex-obfuscated JS, Launch, OpenAction dict, EmbeddedFile, XFA, HTML polyglot) must be rejected
 	for _, payload := range []string{
 		"%PDF-1.7\n1 0 obj << /JavaScript (app.alert(1)) >> endobj",
 		"%PDF-1.7\n1 0 obj << /J#61vaScript (app.alert(1)) >> endobj",
 		"%PDF-1.7\n1 0 obj << /S /JS /JS (evil) >> endobj",
 		"%PDF-1.7\n1 0 obj << /Type /Action /S /Launch /F (cmd.exe) >> endobj",
-		"%PDF-1.7\n1 0 obj << /OpenAction 3 0 R >> endobj",
-		"%PDF-1.7\n1 0 obj << /AA << /O 4 0 R >> >> endobj",
+		"%PDF-1.7\n1 0 obj << /OpenAction << /S /Launch /F (calc.exe) >> >> endobj",
 		"%PDF-1.7\n1 0 obj << /Type /EmbeddedFile >> endobj",
 		"%PDF-1.7\n1 0 obj << /XFA 5 0 R >> endobj",
 		"%PDF-1.7\n<html><script>alert(1)</script></html>",

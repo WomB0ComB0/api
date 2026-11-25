@@ -84,7 +84,8 @@ var (
 	svgActiveRe     = regexp.MustCompile(`(?i)<\s*(?:script|foreignobject|iframe|object|embed|applet|meta|animate|animatemotion|animatetransform|set|handler)\b|<!\s*entity\b|<!\s*doctype\s+[^>]+\[|\bon[a-z]{2,32}\s*=|(?:javascript|vbscript)\s*:|data\s*:\s*(?:text/html|image/svg\+xml)|<\s*use\b[^>]*\b(?:xlink:)?href\s*=\s*["']?\s*(?:https?:|//|data:)|@import\b|expression\s*\(`)
 	htmlPrefixRe    = regexp.MustCompile(`(?i)^\s*(?:<!doctype\s+html|<html\b|<script\b|<iframe\b|<\?php\b)`)
 	pdfNameHexRe    = regexp.MustCompile(`#([0-9a-fA-F]{2})`)
-	pdfActiveObjRe  = regexp.MustCompile(`/(?:JavaScript|JS|Launch|OpenAction|AA|EmbeddedFile|RichMedia|XFA|SubmitForm|ImportData|GoToR|GoToE|Rendition|Sound|Movie)\b`)
+	pdfStreamRe     = regexp.MustCompile(`(?s)\bstream\r?\n.*?\bendstream\b`)
+	pdfActiveObjRe  = regexp.MustCompile(`/(?:JavaScript|EmbeddedFile|RichMedia|XFA)\b|/S\s*/(?:JavaScript|JS|Launch|SubmitForm|ImportData)\b|/OpenAction\s*<<`)
 	pdfPolyglotRe   = regexp.MustCompile(`(?i)(?:<\s*script\b|<!doctype\s+html\b|<\?php\b)`)
 	zipDoubleExtRe  = regexp.MustCompile(`(?i)\.(?:pdf|epub|doc|docx|xls|xlsx|ppt|pptx|jpg|jpeg|png|gif|txt|md|csv)\.(?:exe|scr|bat|cmd|vbs|vbe|js|jse|ps1|msi|hta|lnk|jar|apk|sh)$`)
 	zipDangerousExt = map[string]struct{}{
@@ -259,10 +260,12 @@ func ValidatePDFContent(data []byte) error {
 	if !hasPrefix(data, []byte("%PDF-")) {
 		return apperr.Validation("PDF file must begin with %PDF- signature")
 	}
-	if match := pdfActiveObjRe.Find(data); match != nil {
+	// Strip compressed binary stream payloads so random FlateDecode bytes never false-positive.
+	metadataOnly := pdfStreamRe.ReplaceAll(data, []byte(" "))
+	if match := pdfActiveObjRe.Find(metadataOnly); match != nil {
 		return apperr.Validation(fmt.Sprintf("PDF contains disallowed active object (%s)", string(match)))
 	}
-	decoded := decodePDFHexNames(data)
+	decoded := decodePDFHexNames(metadataOnly)
 	if match := pdfActiveObjRe.Find(decoded); match != nil {
 		return apperr.Validation(fmt.Sprintf("PDF contains obfuscated active object (%s)", string(match)))
 	}
