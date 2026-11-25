@@ -32,6 +32,15 @@ if [ -f "$BACKUP_FILE" ]; then
     # Count remaining backups
     COUNT=$(find "$BACKUP_DIR" -name "backup-*.sql.gz" | wc -l)
     echo "📁 Total backups: $COUNT"
+
+    # Optional Better Stack heartbeat ping on successful backup
+    if [ -n "${BETTERSTACK_HEARTBEAT_URL:-}" ]; then
+        if curl -fsS --max-time 10 "$BETTERSTACK_HEARTBEAT_URL" > /dev/null; then
+            echo "💓 Better Stack heartbeat reported"
+        else
+            echo "⚠️ Better Stack heartbeat ping failed (backup itself succeeded)" >&2
+        fi
+    fi
 else
     echo "❌ Backup failed!"
     exit 1

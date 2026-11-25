@@ -1,6 +1,7 @@
 # API Infrastructure — `api.mikeodnis.dev`
 
 [![CI/CD](https://img.shields.io/github/actions/workflow/status/WomB0ComB0/api/ci-cd.yml?branch=master&label=CI%2FCD)](https://github.com/WomB0ComB0/api/actions/workflows/ci-cd.yml)
+[![Status](https://img.shields.io/badge/Status-status.mikeodnis.dev-4bde81?logo=betterstack&logoColor=white)](https://status.mikeodnis.dev)
 [![Release](https://img.shields.io/github/v/release/WomB0ComB0/api)](https://github.com/WomB0ComB0/api/releases)
 [![License](https://img.shields.io/github/license/WomB0ComB0/api)](LICENSE)
 
