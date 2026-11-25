@@ -20,54 +20,9 @@ Production polyglot API platform hosted end-to-end on **Railway (US East)** alon
 
 ## System Topology (Production)
 
-```mermaid
-flowchart TB
-    Client["Web / Mobile / CLI Clients"]
-    DNS["Vercel DNS (mikeodnis.dev)"]
+![Unified API Gateway and Edge CDN Topology](./docs/diagrams/platform-architecture.svg)
 
-    subgraph Railway["Railway Production (US East — Private IPv6 Mesh)"]
-        GW["Caddy Gateway\nHSTS · zstd/gzip · Keepalive · 3s Retry"]
-
-        subgraph Services["Polyglot Microservices"]
-            Core["Core Service\nBun + Elysia (/v1/core/*)"]
-            Media["Media Service\nGo 1.26 Hexagonal (/v1/media/*)"]
-            Hasura["Hasura GraphQL\n(/v1/links/*)"]
-            Health["Health Aggregator\nPython 3.12 · 2s Cache (/health)"]
-        end
-
-        PG[("PostgreSQL 18\nschemas: core, media, links")]
-    end
-
-    subgraph Cloudflare["Cloudflare Edge (WomB0ComB0/cdn)"]
-        Worker["cdn-worker\nHexagonal TS Worker"]
-        Cache["Edge Cache\n(caches.default)"]
-        R2[("Cloudflare R2\nBucket: cdn")]
-    end
-
-    Axiom["Axiom OTLP US-East Edge\nDataset: api-mikeodnis-dev-traces"]
-
-    Client -->|"HTTPS api.mikeodnis.dev & cdn.mikeodnis.dev"| DNS --> GW
-    GW -->|"/v1/core/*"| Core
-    GW -->|"/v1/media/*"| Media
-    GW -->|"/v1/links/*"| Hasura
-    GW -->|"/health (GET/HEAD)"| Health
-    GW -->|"Host: cdn.mikeodnis.dev"| Worker
-
-    Core -->|"Atomic CTE SQL (pg pool)"| PG
-    Media -->|"Window & Batched SQL (pgxpool)"| PG
-    Hasura -->|"Compiled Lateral-Join SQL"| PG
-    Media -->|"HTTP/2 S3 API (Put / Presign / Delete)"| R2
-
-    Worker <--> Cache
-    Worker -->|"Native R2_BUCKET binding"| R2
-
-    Health --> Core
-    Health --> Media
-    Health --> Hasura
-
-    Core -.->|"OTLP/HTTP Traces"| Axiom
-    Media -.->|"OTLP/HTTP Protobuf Traces"| Axiom
-```
+*Interactive standalone diagram: [`docs/diagrams/platform-architecture.html`](./docs/diagrams/platform-architecture.html)*
 
 ---
 
@@ -75,44 +30,9 @@ flowchart TB
 
 `services/media` implements **Ports & Adapters (Hexagonal Architecture) + DDD**, modeled after [`WomB0ComB0/go-hexagonal`](https://github.com/WomB0ComB0/go-hexagonal). Dependencies strictly point **inward** toward the domain core and are enforced automatically on every `go test` run via Go AST inspection in [`services/media/architecture_test.go`](./services/media/architecture_test.go).
 
-```mermaid
-flowchart LR
-    subgraph Primary["Primary / Driving Adapter (internal/api/http)"]
-        Router["Chi Router · httprate · CORS · otelhttp"]
-        AuthMW["JWTAuth Middleware (HS256 pinned)"]
-        Handlers["Thin HTTP Handlers + AppError Mapper"]
-        Router --> AuthMW --> Handlers
-    end
+![Go Media Service Hexagonal Layer Stack](./docs/diagrams/media-hexagonal-layers.svg)
 
-    subgraph App["Application Layer (internal/application)"]
-        Factory["Application Factory"]
-        UC["Use Cases\nUpload · Presign · Confirm · Get · List · Delete · SignURL · PurgeCache"]
-        Factory --> UC
-    end
-
-    subgraph Domain["Domain Core (internal/domain) — Zero External SDKs"]
-        Model["Asset Aggregate & Value Objects\nVisibility · Filename · OwnedKey"]
-        Bus["Domain Event Bus\nAssetUploadedEvent · AssetDeletedEvent"]
-        Ports["Outbound Ports\nAssetRepository · ObjectStore · URLSigner · CachePurger"]
-    end
-
-    subgraph Secondary["Secondary / Driven Adapters (internal/adapter)"]
-        PGAdapter["postgres.AssetRepository\npgxpool · statement_timeout=10s"]
-        R2Adapter["r2.ObjectStore\nAWS SDK v2 · HTTP/2 · 3x Retries"]
-        CFAdapter["cloudflare.URLSigner & CachePurger\nHMAC-SHA256 + PurgeSubscriber"]
-        OtelAdapter["telemetry.InitTelemetry\nOTLP/HTTP + Header Auth"]
-    end
-
-    Handlers --> Factory
-    UC --> Model
-    UC --> Bus
-    UC --> Ports
-
-    PGAdapter -.->|"implements"| Ports
-    R2Adapter -.->|"implements"| Ports
-    CFAdapter -.->|"implements"| Ports
-    CFAdapter -.->|"subscribes"| Bus
-```
+*Interactive standalone diagram: [`docs/diagrams/media-hexagonal-layers.html`](./docs/diagrams/media-hexagonal-layers.html)*
 
 ---
 
@@ -157,48 +77,12 @@ flowchart LR
 
 ## End-to-End Auth, Upload, Presigned PUT & Private CDN Flow
 
-```mermaid
-sequenceDiagram
-    actor Client
-    participant Core as Core API (/v1/core)
-    participant Media as Media API (/v1/media)
-    participant R2 as Cloudflare R2 (cdn)
-    participant PG as PostgreSQL 18
-    participant CDN as cdn.mikeodnis.dev Worker
+![Path B Quarantined Presigned Upload Sequence](./docs/diagrams/presigned-upload-sequence.svg)
 
-    Client->>Core: POST /v1/core/auth/login
-    Core->>PG: Constant-time Argon2id verify + store refresh token
-    Core-->>Client: HS256 JWT (sub, role, Hasura claims) + refresh_token
+*Interactive standalone diagram: [`docs/diagrams/presigned-upload-sequence.html`](./docs/diagrams/presigned-upload-sequence.html)*
 
-    rect rgba(56, 142, 235, 0.08)
-        Note over Client,CDN: Path A — Private Upload + HMAC Signed Delivery
-        Client->>Media: POST /v1/media/upload (Bearer JWT, visibility=private)
-        Media->>R2: PutObject private/<user_id>/<sha256>.ext
-        Media->>PG: Upsert media.assets row
-        Media-->>Client: AssetDTO + HMAC-SHA256 signed URL (?exp=...&sig=...)
-        Client->>CDN: GET /private/<user_id>/<sha256>.ext?exp=...&sig=...
-        CDN->>CDN: Isolate-cached CryptoKey timing-safe HMAC verify
-        CDN->>R2: R2_BUCKET.get(key, { range })
-        CDN-->>Client: 200 / 206 Streamed private asset (Cache-Control: private)
-    end
-
-    rect rgba(37, 198, 138, 0.08)
-        Note over Client,CDN: Path B — Quarantined Direct-to-R2 Presigned PUT + ETag-Pinned Confirm
-        Client->>Media: POST /v1/media/presign { filename, content_type, visibility }
-        Media-->>Client: { upload_url (15m S3 presigned PUT), key: "staging/..." }
-        Client->>R2: PUT upload_url (direct binary stream to non-servable staging/*)
-        Client->>Media: POST /v1/media/assets/confirm { key, filename, metadata }
-        Media->>R2: HeadObject + ETag-pinned ReadObjectHead (magic-byte + SVG scan)
-        Media->>R2: ETag-pinned CopyObject (staging/* -> assets/* or private/*) + DeleteObject(staging)
-        Media->>PG: Upsert media.assets row (owner-guarded ON CONFLICT)
-        Media-->>Client: 201 Created (AssetDTO; replays return 409 Conflict)
-    end
-
-    Client->>Media: DELETE /v1/media/assets/{id} (Bearer JWT)
-    Media->>R2: DeleteObject
-    Media->>PG: Delete media.assets row
-    Media-->>Client: 204 No Content (emits AssetDeletedEvent)
-```
+- **Path A (Direct Upload + Private HMAC Delivery):** `POST /v1/media/upload` streams multipart payloads directly through magic-byte & SVG validation into `assets/<user_id>/<hash>.ext` or `private/<user_id>/<hash>.ext`; private assets are minted via `POST /v1/media/sign` (`HMAC-SHA256` unpadded Base64URL) and served by `cdn-worker` with `CDN-Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and `X-Robots-Tag: noindex, nofollow`.
+- **Path B (Quarantined Presigned PUT + ETag-Pinned Confirm):** Shown above — `POST /v1/media/presign` targets non-servable `staging/*`; `POST /v1/media/assets/confirm` verifies magic bytes & SVG safety (`513B` sniff sentinel), promotes via ETag-pinned `CopyObject` (`CopySourceIfMatch`), deletes the staging object (replays return `409 Conflict`), and upserts `media.assets`.
 
 ---
 
@@ -326,6 +210,10 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 ---
 
 ## Security, Performance & Reliability Posture
+
+![Security and Edge Trust Boundaries](./docs/diagrams/security-trust-boundaries.svg)
+
+*Interactive standalone diagram: [`docs/diagrams/security-trust-boundaries.html`](./docs/diagrams/security-trust-boundaries.html)*
 
 - **Zero known CVEs**: Enforced on every push & weekly via `bun audit --audit-level=high` (`core-service`) and `govulncheck ./...` (`media-service`, Go `1.26.11`), plus `zizmor` GitHub Actions supply-chain hardening and strict `--frozen-lockfile` Docker builds.
 - **Distributed Rate Limiting (IETF `RateLimit-*` + `Retry-After`)**:

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="media-hexagonal-layers-title media-hexagonal-layers-desc" id="media-hexagonal-layers-root">
+        <title id="media-hexagonal-layers-title">Go Media Service Hexagonal Layer Stack</title>
+        <desc id="media-hexagonal-layers-desc">Five-layer hexagonal architecture stack for the Go Media Service showing composition root, HTTP primary adapter, application use cases, highlighted zero-dependency domain core, and secondary infrastructure adapters.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #media-hexagonal-layers-root { --color-paper:   #0c0c14;
+      --color-paper-2: #15151f;
+      --color-ink:     #e8e9ff;
+      --color-muted:   #a8a8c3;
+      --color-soft:    #8d8da1;
+      --color-accent:  #aaa8ee;
+      --color-link:    #6dbbe8;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #media-hexagonal-layers-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #media-hexagonal-layers-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#media-hexagonal-layers-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="media-hexagonal-layers-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#a8a8c3"/></marker>
+          <marker id="media-hexagonal-layers-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#aaa8ee"/></marker>
+          <marker id="media-hexagonal-layers-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6dbbe8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#0c0c14"/>
+
+        <!-- Direction rail (left margin) -->
+        <text x="76" y="68" fill="#8d8da1" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.16em">OUTER</text>
+        <line x1="76" y1="84" x2="76" y2="432" stroke="#45455d" stroke-width="1"/>
+        <polygon points="72,428 80,428 76,436" fill="#a8a8c3"/>
+        <text x="76" y="456" fill="#8d8da1" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.16em">INWARD</text>
+
+        <!-- Outer stack hairlines -->
+        <line x1="136" y1="80" x2="920" y2="80" stroke="#45455d" stroke-width="1"/>
+        <line x1="136" y1="440" x2="920" y2="440" stroke="#45455d" stroke-width="1"/>
+
+        <!-- L5: Composition Root -->
+        <rect x="136" y="80" width="784" height="72" fill="#15151f"/>
+        <line x1="136" y1="152" x2="920" y2="152" stroke="#2c2c3c" stroke-width="1"/>
+        <text x="156" y="120" fill="#a8a8c3" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L5</text>
+        <text x="236" y="120" fill="#e8e9ff" font-size="14" font-weight="600" font-family="'Geist', sans-serif">Composition Root</text>
+        <text x="900" y="120" fill="#a8a8c3" font-size="9" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">cmd/server/main.go · DI &amp; EventBus</text>
+
+        <!-- L4: Primary Adapter (HTTP) -->
+        <rect x="136" y="152" width="784" height="72" fill="#0c0c14"/>
+        <line x1="136" y1="224" x2="920" y2="224" stroke="#2c2c3c" stroke-width="1"/>
+        <text x="156" y="192" fill="#a8a8c3" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L4</text>
+        <text x="236" y="192" fill="#e8e9ff" font-size="14" font-weight="600" font-family="'Geist', sans-serif">Primary Adapter (HTTP)</text>
+        <text x="900" y="192" fill="#a8a8c3" font-size="9" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">internal/api/http · Chi · JWT · RateLimit</text>
+
+        <!-- L3: Application Layer -->
+        <rect x="136" y="224" width="784" height="72" fill="#15151f"/>
+        <line x1="136" y1="296" x2="920" y2="296" stroke="#2c2c3c" stroke-width="1"/>
+        <text x="156" y="264" fill="#a8a8c3" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L3</text>
+        <text x="236" y="264" fill="#e8e9ff" font-size="14" font-weight="600" font-family="'Geist', sans-serif">Application Use Cases</text>
+        <text x="900" y="264" fill="#a8a8c3" font-size="9" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">internal/application · Upload · Confirm · Sign</text>
+
+        <!-- L2: Domain Core (FOCAL) -->
+        <rect x="136" y="296" width="784" height="72" fill="#8884d5" fill-opacity="0.14"/>
+        <rect x="136" y="296" width="784" height="72" fill="none" stroke="#aaa8ee" stroke-width="1.2"/>
+        <text x="156" y="336" fill="#aaa8ee" font-size="8" font-family="'Geist Mono', monospace" font-weight="600" letter-spacing="0.14em">L2</text>
+        <text x="236" y="336" fill="#e8e9ff" font-size="14" font-weight="600" font-family="'Geist', sans-serif">Domain Core (Zero External SDKs)</text>
+        <text x="900" y="336" fill="#aaa8ee" font-size="9" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">internal/domain · Asset · Value Objects · Ports</text>
+
+        <!-- L1: Secondary Adapters -->
+        <rect x="136" y="368" width="784" height="72" fill="#15151f"/>
+        <text x="156" y="408" fill="#a8a8c3" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L1</text>
+        <text x="236" y="408" fill="#e8e9ff" font-size="14" font-weight="600" font-family="'Geist', sans-serif">Secondary Adapters</text>
+        <text x="900" y="408" fill="#a8a8c3" font-size="9" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">internal/adapter · R2 · pgx · URLSigner · OTel</text>
+
+        <!-- Editorial Callout -->
+        <text x="136" y="492" fill="#aaa8ee" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">CI INVARIANT</text>
+        <text x="240" y="492" fill="#a8a8c3" font-size="14" font-family="'Instrument Serif', serif" font-style="italic">architecture_test.go enforces zero pgx, Chi, net/http, or AWS SDK imports inside internal/domain.</text>
+
+        <!-- Legend strip -->
+        <line x1="40" y1="536" x2="920" y2="536" stroke="#2c2c3c" stroke-width="0.8"/>
+        <text x="40" y="552" fill="#a8a8c3" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+        <rect x="40" y="564" width="14" height="10" rx="2" fill="#8884d5" stroke="#aaa8ee" stroke-width="1" fill-opacity="0.14"/>
+        <text x="60" y="572" fill="#a8a8c3" font-size="8.5" font-family="'Geist', sans-serif">Focal domain core</text>
+
+        <rect x="196" y="564" width="14" height="10" rx="2" fill="#15151f" stroke="#45455d" stroke-width="1"/>
+        <text x="216" y="572" fill="#a8a8c3" font-size="8.5" font-family="'Geist', sans-serif">Hexagonal boundary layer</text>
+
+        <line x1="392" y1="569" x2="420" y2="569" stroke="#a8a8c3" stroke-width="1.2" marker-end="url(#media-hexagonal-layers-arrow)"/>
+        <text x="428" y="572" fill="#a8a8c3" font-size="8.5" font-family="'Geist', sans-serif">Dependencies point inward toward ports</text>
+      </svg>

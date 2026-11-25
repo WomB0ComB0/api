@@ -2,33 +2,9 @@
 
 ## 1. High-Level Topology
 
-```mermaid
-flowchart TB
-    Users["Browsers / Next.js / Upload Studio PWA / Desktop CLI"]
+![Unified API Gateway and Edge CDN Topology](./diagrams/platform-architecture.svg)
 
-    subgraph Railway["Railway Production Mesh"]
-        GW["Gateway: Caddy 2.11 (trusted_proxies_strict, fail-closed routing)"]
-        Core["core-service :3000 (Bun + Elysia + Upstash Redis)"]
-        Media["media-service :8080 (Go 1.26 Hexagonal)"]
-        Hasura["hasura :8080 (GraphQL — gateway allowlisted)"]
-        Health["health-aggregator :8000 (Python 3.12, 2s coalesced)"]
-        PG[("PostgreSQL 16")]
-    end
-
-    subgraph Cloudflare["Cloudflare Edge"]
-        CDN["cdn-worker (Cloudflare Worker — cdn.mikeodnis.dev)"]
-        R2[("Cloudflare R2 (cdn)")]
-    end
-
-    Users -->|"api.mikeodnis.dev"| GW
-    Users -->|"cdn.mikeodnis.dev (via Caddy or CF DNS)"| GW
-    GW -->|"X-Gateway-Proxy-Secret + X-Gateway-Client-IP"| CDN
-    CDN --> R2
-    GW --> Core & Media & Hasura & Health
-    Core & Media & Hasura --> PG
-    Media -->|"assets/*, private/*, staging/*"| R2
-    Media -.->|"Purge API"| Cloudflare
-```
+*Interactive source: [`diagrams/platform-architecture.html`](./diagrams/platform-architecture.html)*
 
 ---
 
@@ -46,6 +22,10 @@ flowchart TB
 ---
 
 ## 3. Edge Gateway Hardening (`services/gateway`)
+
+![Security and Edge Trust Boundaries](./diagrams/security-trust-boundaries.svg)
+
+*Interactive source: [`diagrams/security-trust-boundaries.html`](./diagrams/security-trust-boundaries.html)*
 
 - **Strict Client IP Extraction:** Caddy 2.11 configures `trusted_proxies_strict` so downstream services extract client IPs right-to-left without trusting spoofed `X-Forwarded-For` prefixes.
 - **Fail-Closed Hasura Allowlist:** Only `/v1/links/graphql`, `/v1/links/v1/graphql`, and `/v1/links/healthz` are proxied; `X-Hasura-Admin-Secret` and `X-Hasura-Access-Key` are stripped at ingress; GraphQL payloads are capped at `256KB`; admin/metadata/console endpoints (`/v1/metadata`, `/v1/query`, `/v2/query`, `/console`, `/v1/version`) are blocked.
@@ -65,22 +45,9 @@ Enforced automatically by [architecture_test.go](file:///home/wombocombo/github/
 | **Secondary Adapters** | `internal/adapter/**` | `domain/**`, `config`, `pkg/apperr` | `api` |
 | **Composition Root** | `cmd/server/main.go` | All layers (wires DI + event bus) | — |
 
-```mermaid
-flowchart TD
-    Main["cmd/server/main.go (Composition Root)"]
-    API["internal/api/http (Chi Router, JWT + RateLimit Middleware, Thin Handlers)"]
-    App["internal/application (Factory + Use Cases)"]
-    Dom["internal/domain (Asset Aggregate, Value Objects, EventBus, Ports)"]
-    Adp["internal/adapter (Postgres pgx, Cloudflare R2, URLSigner, CachePurger, OTel)"]
+![Go Media Service Hexagonal Layer Stack](./diagrams/media-hexagonal-layers.svg)
 
-    Main --> API
-    Main --> App
-    Main --> Adp
-    API --> App
-    API --> Dom
-    App --> Dom
-    Adp --> Dom
-```
+*Interactive source: [`diagrams/media-hexagonal-layers.html`](./diagrams/media-hexagonal-layers.html)*
 
 Key security invariants in Media Service:
 - 513-byte UTF-8 sniff sentinel + magic-byte validation + active-content SVG sanitization on both direct uploads and staged confirms.
