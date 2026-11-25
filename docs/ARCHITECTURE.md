@@ -17,7 +17,7 @@ flowchart TB
 
     subgraph Cloudflare["Cloudflare Edge"]
         CDN["cdn-worker (Cloudflare Worker — cdn.mikeodnis.dev)"]
-        R2[("Cloudflare R2 (mikeodnis-cdn)")]
+        R2[("Cloudflare R2 (cdn)")]
     end
 
     Users -->|"api.mikeodnis.dev"| GW

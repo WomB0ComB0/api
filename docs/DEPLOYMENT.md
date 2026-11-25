@@ -31,7 +31,7 @@ From `~/github/prs/cdn/cloudflare-worker`:
 bunx wrangler login
 
 # 2. Create the R2 bucket (if not already created)
-bunx wrangler r2 bucket create mikeodnis-cdn
+bunx wrangler r2 bucket create cdn
 
 # 3. Upload shared secrets via stdin (never pass secrets as CLI args)
 printf '%s' "$SIGNING_SECRET" | bunx wrangler secret put SIGNING_SECRET
@@ -72,7 +72,7 @@ Create each service pointing to this repository with its corresponding `railway.
 | Railway Service | Config File (`RAILWAY_CONFIG_FILE`) | Internal Port | Required Environment Variables |
 | :--- | :--- | :---: | :--- |
 | `core-service` | `services/core/railway.toml` | `3000` | `NODE_ENV=production`, `PORT=3000`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `JWT_SECRET`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
-| `media-service` | `services/media/railway.toml` | `8080` | `GO_ENV=production`, `PORT=8080`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `JWT_SECRET`, `SIGNING_SECRET`, `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_R2_BUCKET=mikeodnis-cdn`, `CLOUDFLARE_R2_PUBLIC_URL=https://cdn.mikeodnis.dev`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN` |
+| `media-service` | `services/media/railway.toml` | `8080` | `GO_ENV=production`, `PORT=8080`, `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `JWT_SECRET`, `SIGNING_SECRET`, `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_R2_BUCKET=cdn`, `CLOUDFLARE_R2_PUBLIC_URL=https://cdn.mikeodnis.dev`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN` |
 | `hasura` | `hasura/railway.toml` | `8080` | `HASURA_GRAPHQL_DATABASE_URL=${{Postgres.DATABASE_URL}}`, `HASURA_GRAPHQL_ADMIN_SECRET`, `HASURA_GRAPHQL_JWT_SECRET={"type":"HS256","key":"<JWT_SECRET>"}`, `HASURA_GRAPHQL_ENABLE_CONSOLE=false` (gateway also enforces fail-closed route allowlist & strips admin headers) |
 | `health-aggregator` | `services/health/railway.toml` | `8000` | `PORT=8000`, `SERVICES=core=http://core-service.railway.internal:3000/v1/core/health,media=http://media-service.railway.internal:8080/v1/media/health,hasura=http://hasura.railway.internal:8080/healthz` |
 | `gateway` (Public) | `services/gateway/railway.toml` | `8080` | `CORE_UPSTREAM=core-service.railway.internal:3000`, `MEDIA_UPSTREAM=media-service.railway.internal:8080`, `HASURA_UPSTREAM=hasura.railway.internal:8080`, `HEALTH_UPSTREAM=health-aggregator.railway.internal:8000`, `CDN_UPSTREAM=<worker>.workers.dev`, `GATEWAY_PROXY_SECRET` |

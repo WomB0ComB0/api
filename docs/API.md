@@ -227,9 +227,9 @@ All rate-limited responses emit `RateLimit-Limit`, `RateLimit-Remaining`, `RateL
 | Media | `media-ip` (outer ceiling) | **120 req / 60s** | Trusted Client IP |
 | Media | `media-write` (upload / presign / confirm / purge / delete) | **20 req / 60s** | Authenticated User ID |
 | Media | `media-read` (list / get / sign) | **100 req / 60s** | Authenticated User ID |
-| CDN Edge | `cdn-public` (`/assets/*`, `/health`, discovery) | **300 req / 60s** | Per-visitor IP (`X-Gateway-Client-IP` / `CF-Connecting-IP`) |
-| CDN Edge | `cdn-private` (`/private/*`) | **60 req / 60s** | Per-visitor IP |
-| CDN Edge | `cdn-transform` (`/img/assets/*`) | **30 req / 60s** | Per-visitor IP |
+| CDN Edge | `cdn-assets` (`/assets/*`, discovery) | **300 req / 60s** | Per-visitor IP (`X-Gateway-Client-IP` / `CF-Connecting-IP`) |
+| CDN Edge | `cdn-private` (`/private/*`) | **120 req / 60s** | Per-visitor IP |
+| CDN Edge | `cdn-img` (`/img/assets/*`) | **60 req / 60s** | Per-visitor IP |
 
 ---
 
