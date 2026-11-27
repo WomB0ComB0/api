@@ -109,6 +109,31 @@
 		file_server
 	}
 
+	# Shared subdomain fonts for the root page, the same files cdn.mikeodnis.dev serves:
+	# Geist + Geist Mono 1.900 (OFL-1.1, same-origin so the root CSP's default-src 'self' covers them).
+	# Font names carry their version, so they are cached as immutable; the cache headers go on files
+	# that exist only, so a missing name is never cached for a year.
+	@brandfonts path /_brand/fonts/*.woff2
+	handle @brandfonts {
+		@brandfonts_found file {
+			root /srv/static
+		}
+		header @brandfonts_found {
+			Content-Type "font/woff2"
+			Cache-Control "public, max-age=31536000, immutable"
+		}
+		root * /srv/static
+		file_server
+	}
+
+	@brandlicense path /_brand/fonts/OFL.txt
+	handle @brandlicense {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=86400"
+		root * /srv/static
+		file_server
+	}
+
 	@docs path /docs /docs/
 	handle @docs {
 		header Content-Type "text/html; charset=utf-8"
