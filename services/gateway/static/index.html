@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>api.mikeodnis.dev — Shared Platform API Gateway</title>
+  <title>API - Mike Odnis</title>
   <meta name="description" content="Unified multi-service API gateway for *.mikeodnis.dev: ElysiaJS Core Auth/Users API, Go Chi Media/R2 API, Hasura GraphQL Engine, and Health Aggregator." />
   <meta name="theme-color" content="#0c0c14" />
   <link rel="canonical" href="https://api.mikeodnis.dev/" />
@@ -12,20 +12,24 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="describedby" type="text/markdown" href="/llms.txt" title="LLM documentation index" />
   <link rel="service-desc" type="application/openapi+json" href="/v1/core/openapi.json" title="Core API OpenAPI 3.1" />
-  <meta property="og:site_name" content="api.mikeodnis.dev" />
+  <link rel="preload" href="/_brand/fonts/geist-v1.9-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/_brand/subdomain.css" />
+  <meta property="og:site_name" content="API - Mike Odnis" />
   <meta property="og:type" content="website" />
+  <meta property="og:locale" content="en_US" />
   <meta property="og:url" content="https://api.mikeodnis.dev/" />
-  <meta property="og:title" content="api.mikeodnis.dev — Shared Platform API Gateway" />
+  <meta property="og:title" content="API - Mike Odnis" />
   <meta property="og:description" content="Core Auth &amp; Users (ElysiaJS/Bun), Media &amp; R2 Uploads (Go Chi), Links GraphQL (Hasura), and unified OpenAPI documentation." />
   <meta property="og:image" content="https://api.mikeodnis.dev/opengraph-image.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:type" content="image/png" />
-  <meta property="og:image:alt" content="api.mikeodnis.dev — Platform API gateway, Core auth, R2 media uploads, GraphQL, live telemetry" />
+  <meta property="og:image:alt" content="API - Mike Odnis. Platform API gateway, Core auth, R2 media uploads, GraphQL, live telemetry" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="api.mikeodnis.dev — Shared Platform API Gateway" />
+  <meta name="twitter:title" content="API - Mike Odnis" />
   <meta name="twitter:description" content="Core Auth &amp; Users (ElysiaJS/Bun), Media &amp; R2 Uploads (Go Chi), Links GraphQL (Hasura), and unified OpenAPI documentation." />
   <meta name="twitter:image" content="https://api.mikeodnis.dev/twitter-image.png" />
+  <meta name="twitter:image:alt" content="API - Mike Odnis. Platform API gateway, Core auth, R2 media uploads, GraphQL, live telemetry" />
   <meta name="twitter:creator" content="@mike_odnis" />
   <script type="application/ld+json">
     {
@@ -75,312 +79,288 @@
       ]
     }
   </script>
-  <style>
-    :root {
-      color-scheme: dark;
-      --light-rays: rgb(88 68 188);
-      --canvas: #0c0c14;
-      --surface-1: rgba(17, 17, 28, 0.86);
-      --surface-2: #161625;
-      --surface-3: #1e1e32;
-      --hairline: rgba(255, 255, 255, 0.08);
-      --hairline-strong: rgba(255, 255, 255, 0.16);
-      --fg: #f4f4f8;
-      --muted: #a1a1b5;
-      --faint: #71718a;
-      --brand: #a78bfa;
-      --brand-ink: #c4b5fd;
-      --brand-subtle: rgba(167, 139, 250, 0.14);
-      --live: #34d399;
-      --live-tint: rgba(52, 211, 153, 0.12);
-      --radius: 14px;
-      --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-    * { box-sizing: border-box; }
-    html, body {
-      margin: 0; padding: 0; background: var(--canvas); color: var(--fg);
-      font-family: var(--font-sans); line-height: 1.55; -webkit-font-smoothing: antialiased;
-    }
-    body {
-      position: relative;
-      isolation: isolate;
-      min-height: 100dvh;
-    }
-    .light-glows {
-      background-image:
-        radial-gradient(circle at 20% 15%, rgba(88, 68, 188, 0.054), transparent 70%),
-        radial-gradient(circle at 80% 10%, rgba(88, 68, 188, 0.042), transparent 75%);
-      background-image:
-        radial-gradient(circle at 20% 15%, oklch(from var(--light-rays) l c h / 5.4%), transparent 70%),
-        radial-gradient(circle at 80% 10%, oklch(from var(--light-rays) l c h / 4.2%), transparent 75%);
-    }
-    .light-rays {
-      position: absolute;
-      inset: 0;
-      z-index: -1;
-      overflow: hidden;
-      pointer-events: none;
-    }
-    .light-rays > i {
-      --ray-cycle: calc(var(--ray-duration) * 1.1);
-      position: absolute;
-      top: -12%;
-      left: var(--ray-left);
-      width: var(--ray-width);
-      height: 70vh;
-      border-radius: 9999px;
-      background: linear-gradient(to bottom, rgba(88, 68, 188, 0.14), transparent);
-      background: linear-gradient(to bottom, oklch(from var(--light-rays) l c h / 14%), transparent);
-      filter: blur(20px);
-      opacity: 0;
-      translate: -50% 0;
-      rotate: var(--ray-rotate);
-      transform-origin: 50% 0;
-      animation: light-ray var(--ray-cycle) ease-in-out calc(var(--ray-delay) - var(--ray-cycle)) infinite;
-    }
-    @keyframes light-ray {
-      0% { opacity: 0; rotate: calc(var(--ray-rotate) - var(--ray-swing)); }
-      45.45% { opacity: var(--ray-peak); rotate: calc(var(--ray-rotate) + var(--ray-swing)); }
-      90.91%, 100% { opacity: 0; rotate: calc(var(--ray-rotate) - var(--ray-swing)); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .light-rays > i {
-        animation-name: none !important;
-        opacity: calc(var(--ray-peak) * 0.6);
-      }
-    }
-    @media (forced-colors: active), print {
-      .light-glows { background-image: none; }
-      .light-rays { display: none; }
-    }
-    a { color: var(--brand-ink); text-decoration: none; }
-    a:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-style: dotted; }
-    code, pre { font-family: var(--font-mono); }
-    .shell { max-width: 1080px; margin: 0 auto; padding: 1.25rem 1.25rem 4rem; }
-    .constellation {
-      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;
-      padding: 0.65rem 0.9rem; margin-bottom: 1.75rem;
-      background: rgba(17, 17, 28, 0.85); border: 1px solid var(--hairline); border-radius: var(--radius);
-      backdrop-filter: blur(12px);
-    }
-    .constellation-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
-    .constellation-links a, .constellation-links span.here {
-      padding: 0.3rem 0.6rem; border-radius: 8px; color: var(--muted); transition: background 140ms, color 140ms;
-    }
-    .constellation-links a:hover { background: var(--surface-3); color: var(--fg); text-decoration: none; }
-    .constellation-links span.here { background: var(--brand-subtle); color: var(--brand-ink); font-weight: 600; }
-    .label-mono {
-      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
-    }
-    .tile {
-      background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.25rem;
-      backdrop-filter: blur(8px);
-    }
-    .tile:hover { border-color: var(--hairline-strong); }
-    .grid { display: grid; gap: 1rem; }
-    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-    .grid-4 { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-    .hero { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1.25rem; }
-    h1 { margin: 0.35rem 0 0.5rem; font-size: clamp(1.65rem, 3.2vw, 2.35rem); letter-spacing: -0.025em; line-height: 1.15; }
-    h2 { margin: 0 0 0.75rem; font-size: 1.05rem; letter-spacing: -0.01em; }
-    p { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.94rem; }
-    .pill {
-      display: inline-flex; align-items: center; gap: 0.45rem;
-      font-family: var(--font-mono); font-size: 0.75rem;
-      padding: 0.25rem 0.65rem; border-radius: 999px;
-      border: 1px solid rgba(52, 211, 153, 0.3); background: var(--live-tint); color: var(--live);
-    }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); }
-    .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1rem; }
-    .btn {
-      display: inline-flex; align-items: center; gap: 0.45rem;
-      font-size: 0.86rem; font-weight: 500; padding: 0.55rem 0.95rem; border-radius: 10px;
-      border: 1px solid var(--hairline-strong); background: var(--surface-2); color: var(--fg);
-      transition: background 140ms;
-    }
-    .btn:hover { background: var(--surface-3); text-decoration: none; }
-    .btn-brand { background: var(--brand-subtle); border-color: rgba(167, 139, 250, 0.45); color: var(--brand-ink); }
-    .btn-brand:hover { background: rgba(167, 139, 250, 0.22); }
-    .stat-val { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 600; color: var(--fg); margin-top: 0.25rem; }
-    .stat-sub { font-size: 0.8rem; color: var(--faint); margin-top: 0.25rem; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }
-    th { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 500; }
-    .badge {
-      display: inline-block; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
-      padding: 0.15rem 0.45rem; border-radius: 6px; background: var(--brand-subtle); color: var(--brand-ink);
-    }
-    pre {
-      margin: 0.5rem 0 0; padding: 0.9rem 1rem; overflow-x: auto;
-      background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px;
-      font-size: 0.8rem; color: #e2e8f0;
-    }
-    .faq details { border-bottom: 1px solid var(--hairline); padding: 0.75rem 0; }
-    .faq details:last-child { border-bottom: 0; }
-    .faq summary { cursor: pointer; font-weight: 500; color: var(--fg); font-size: 0.92rem; }
-    .faq details p { margin: 0.5rem 0 0; }
-    footer {
-      margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline);
-      display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem; font-size: 0.8rem; color: var(--faint);
-    }
-  </style>
 </head>
 <body class="light-glows">
-  <div class="light-rays" aria-hidden="true">
-    <i style="--ray-left:90.5%;--ray-width:221px;--ray-rotate:-7.9deg;--ray-swing:2.5deg;--ray-duration:12s;--ray-delay:12.2s;--ray-peak:0.84"></i>
-    <i style="--ray-left:21.7%;--ray-width:272px;--ray-rotate:-24deg;--ray-swing:2deg;--ray-duration:17.2s;--ray-delay:4.7s;--ray-peak:0.72"></i>
-    <i style="--ray-left:38.8%;--ray-width:307px;--ray-rotate:10.6deg;--ray-swing:1.1deg;--ray-duration:16.5s;--ray-delay:11.6s;--ray-peak:0.73"></i>
-    <i style="--ray-left:53.5%;--ray-width:271px;--ray-rotate:16deg;--ray-swing:1.9deg;--ray-duration:15s;--ray-delay:2.9s;--ray-peak:0.86"></i>
-    <i style="--ray-left:20.6%;--ray-width:258px;--ray-rotate:12.4deg;--ray-swing:1.9deg;--ray-duration:15.1s;--ray-delay:1.3s;--ray-peak:0.81"></i>
-  </div>
-  <div class="shell">
-    <nav class="constellation" aria-label="*.mikeodnis.dev network">
-      <span class="label-mono">*.mikeodnis.dev</span>
-      <div class="constellation-links">
-        <a href="https://mikeodnis.dev">Portfolio</a>
-        <a href="https://links.mikeodnis.dev">Links</a>
-        <a href="https://blog.mikeodnis.dev">Blog</a>
-        <a href="https://news.mikeodnis.dev">News</a>
-        <span class="here" aria-current="page">API</span>
-        <a href="https://cdn.mikeodnis.dev">CDN</a>
-        <a href="https://status.mikeodnis.dev">Status</a>
-        <a href="https://mikeodnis.dev/sponsor">Sponsor</a>
-      </div>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="m2.25 12l8.955-8.955a1.124 1.124 0 0 1 1.59 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></symbol><symbol id="i-book-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M12 6.042A8.97 8.97 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A9 9 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.97 8.97 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A9 9 0 0 0 18 18a8.97 8.97 0 0 0-6 2.292m0-14.25v14.25"/></symbol><symbol id="i-arrow-up-tray" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></symbol><symbol id="i-globe-alt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a9 9 0 0 1 7.843 4.582M12 3a9 9 0 0 0-7.843 4.582m15.686 0A11.95 11.95 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.96 8.96 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.9 17.9 0 0 1 12 16.5a17.9 17.9 0 0 1-8.716-2.247m0 0A9 9 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418"/></symbol><symbol id="i-code-bracket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/></symbol><symbol id="i-arrow-up-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="m4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"/></symbol><symbol id="i-bars-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></symbol><symbol id="i-x-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M6 18L18 6M6 6l12 12"/></symbol><symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"/></symbol><symbol id="i-document-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9"/></symbol><symbol id="i-newspaper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5 3h7.5m3-9h3.375c.621 0 1.125.504 1.125 1.125V18a2.25 2.25 0 0 1-2.25 2.25M16.5 7.5V18a2.25 2.25 0 0 0 2.25 2.25M16.5 7.5V4.875c0-.621-.504-1.125-1.125-1.125H4.125C3.504 3.75 3 4.254 3 4.875V18a2.25 2.25 0 0 0 2.25 2.25h13.5M6 7.5h3v3H6z"/></symbol><symbol id="i-cpu-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25m.75-12h9v9h-9z"/></symbol><symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M2.25 15a4.5 4.5 0 0 0 4.5 4.5H18a3.75 3.75 0 0 0 1.332-7.257a3 3 0 0 0-3.758-3.848a5.25 5.25 0 0 0-10.233 2.33A4.5 4.5 0 0 0 2.25 15"/></symbol><symbol id="i-signal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788M12 12h.008v.008H12zm.375 0a.375.375 0 1 1-.75 0a.375.375 0 0 1 .75 0"/></symbol><symbol id="i-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M21 8.25c0-2.485-2.099-4.5-4.687-4.5c-1.936 0-3.598 1.126-4.313 2.733c-.715-1.607-2.377-2.733-4.312-2.733C5.098 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12"/></symbol><symbol id="i-briefcase" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18c-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48 48 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A24 24 0 0 1 12 15.75a24 24 0 0 1-7.577-1.22a2 2 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48 48 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v.894m7.5 0a49 49 0 0 0-7.5 0M12 12.75h.008v.008H12z"/></symbol></svg>
+  <div class="light-rays" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+
+  <header class="rail">
+    <nav class="rail-nav" aria-label="Main navigation">
+      <a class="rail-item" href="/" aria-label="Home" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span class="rail-tip" aria-hidden="true">Home</span></a>
+      <a class="rail-item" href="/docs" aria-label="API reference"><svg class="icon" aria-hidden="true"><use href="#i-book-open"/></svg><span class="rail-tip" aria-hidden="true">API reference</span></a>
+      <a class="rail-item" href="/v1/core/docs" aria-label="Core docs"><svg class="icon" aria-hidden="true"><use href="#i-cpu-chip"/></svg><span class="rail-tip" aria-hidden="true">Core docs</span></a>
+      <button class="rail-item" type="button" popovertarget="site-menu" aria-label="Network: *.mikeodnis.dev"><svg class="icon" aria-hidden="true"><use href="#i-globe-alt"/></svg><span class="rail-tip" aria-hidden="true">*.mikeodnis.dev</span></button>
+      <div class="rail-sep" aria-hidden="true"></div>
+      <a class="rail-item" href="https://github.com/WomB0ComB0/api" aria-label="Source on GitHub (opens in a new tab)" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-code-bracket"/></svg><span class="rail-tip" aria-hidden="true">Source on GitHub</span></a>
     </nav>
+  </header>
 
-    <main class="grid">
-      <section class="tile">
-        <div class="hero">
-          <div>
-            <span class="label-mono">Platform API Gateway · Caddy · Bun · Go · Hasura</span>
-            <h1>api.mikeodnis.dev</h1>
-            <p style="max-width:64ch">
-              Shared polyglot API gateway powering the <code>*.mikeodnis.dev</code> ecosystem — unified HS256 JWT + Hasura auth,
-              scoped <code>mk_live_*</code> API keys, Cloudflare R2 media uploads, distributed Upstash Redis rate limiting, and OpenTelemetry tracing.
-            </p>
-            <div class="actions">
-              <a class="btn btn-brand" href="/docs">Unified API Docs (Core + Media + CDN) →</a>
-              <a class="btn" href="/v1/core/docs">Core Docs</a>
-              <a class="btn" href="https://cdn.mikeodnis.dev/upload">CDN Upload Studio</a>
-              <a class="btn" href="/llms.txt">llms.txt</a>
-            </div>
+  <div class="page">
+    <main id="main" class="shell" tabindex="-1">
+      <header class="page-header">
+        <div class="page-heading">
+          <p class="page-eyebrow">api.mikeodnis.dev</p>
+          <h1 class="page-title">API</h1>
+          <p class="page-lede">Shared polyglot API gateway powering the <code>*.mikeodnis.dev</code> ecosystem: unified HS256 JWT + Hasura auth, scoped <code>mk_live_*</code> API keys, Cloudflare R2 media uploads, distributed Upstash Redis rate limiting, and OpenTelemetry tracing.</p>
+          <p class="page-stack">Platform API gateway&nbsp;· Caddy&nbsp;· Bun&nbsp;· Go&nbsp;· Hasura</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="/docs">Unified API docs (Core + Media + CDN)</a>
+            <a class="btn" href="/v1/core/docs">Core docs</a>
+            <a class="btn" href="https://cdn.mikeodnis.dev/upload" target="_blank" rel="noopener noreferrer">CDN Upload Studio<svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a>
+            <a class="btn" href="/llms.txt">llms.txt</a>
           </div>
-          <a id="live-pill" class="pill" href="https://status.mikeodnis.dev" target="_blank" rel="noopener noreferrer" aria-live="polite" style="text-decoration:none">
-            <span class="dot"></span>
-            <span id="live-pill-text">Gateway operational · Status ↗</span>
-          </a>
+        </div>
+        <div class="page-aside">
+          <p class="status" role="status" data-status data-tone="idle">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="status-word">Checking status…</span>
+            <span class="status-detail"></span>
+          </p>
+        </div>
+      </header>
+
+      <section class="section" aria-labelledby="cards-heading">
+        <div class="section-head">
+          <h2 id="cards-heading" class="section-label">Mounted services</h2>
+        </div>
+        <ul class="card-row">
+            <li class="tile card">
+              <p class="card-label">ElysiaJS&nbsp;· Bun</p>
+              <p class="card-value"><code class="card-route">/v1/core</code></p>
+              <p class="card-meta">Auth, rotating refresh tokens, <code>mk_live_*</code> keys, users, status</p>
+            </li>
+            <li class="tile card">
+              <p class="card-label">Go&nbsp;· Chi</p>
+              <p class="card-value"><code class="card-route">/v1/media</code></p>
+              <p class="card-meta">Magic-byte &amp; SVG verified uploads, quarantined <code>staging/*</code> presign, HMAC signing</p>
+            </li>
+            <li class="tile card">
+              <p class="card-label">Hasura GraphQL</p>
+              <p class="card-value"><code class="card-route">/v1/links/graphql</code></p>
+              <p class="card-meta">Allow-listed short-link GraphQL (256 KB cap, admin routes blocked at gateway)</p>
+            </li>
+            <li class="tile card">
+              <p class="card-label">Observability</p>
+              <p class="card-value"><code class="card-route">/health</code></p>
+              <p class="card-meta">Aggregated service liveness, DB readiness &amp; Redis limiter telemetry</p>
+            </li>
+        </ul>
+      </section>
+
+      <section class="section" aria-labelledby="table-heading">
+        <div class="section-head">
+          <h2 id="table-heading" class="section-label">Rate-limit policies (IETF draft headers)</h2>
+          <p class="section-meta">6 tiers</p>
+        </div>
+        <div class="tile tile-flush">
+          <p class="tile-intro">Every response emits standard <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code>, <code>RateLimit-Reset</code>, <code>RateLimit-Policy</code>, and <code>Retry-After</code> on HTTP 429.</p>
+          <div class="table-wrap">
+            <table class="ref-table">
+              <thead>
+                <tr><th scope="col">Service</th><th scope="col">Tier</th><th scope="col">Quota</th><th scope="col">Keying</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Core</td><td><span class="badge">auth</span></td><td class="cell-nowrap" data-label="Quota">10 req / 60s</td><td class="cell-desc" data-label="Keying">Trusted Client IP (login, register, refresh, logout)</td></tr>
+                <tr><td>Core</td><td><span class="badge">auth-keys</span></td><td class="cell-nowrap" data-label="Quota">20 req / 60s</td><td class="cell-desc" data-label="Keying">Verified JWT User / Trusted IP (JWT-only)</td></tr>
+                <tr><td>Core</td><td><span class="badge">write</span></td><td class="cell-nowrap" data-label="Quota">30 req / 60s</td><td class="cell-desc" data-label="Keying">Verified JWT User / Dual IP + API key / IP</td></tr>
+                <tr><td>Core</td><td><span class="badge">read</span></td><td class="cell-nowrap" data-label="Quota">100 req / 60s</td><td class="cell-desc" data-label="Keying">Verified JWT User / Dual IP + API key / IP</td></tr>
+                <tr><td>Media</td><td><span class="badge">media-write</span></td><td class="cell-nowrap" data-label="Quota">20 req / 60s</td><td class="cell-desc" data-label="Keying">User ID (upload, presign, confirm, purge, delete; 120/min IP ceiling)</td></tr>
+                <tr><td>Media</td><td><span class="badge">media-read</span></td><td class="cell-nowrap" data-label="Quota">100 req / 60s</td><td class="cell-desc" data-label="Keying">User ID (list, get, sign; 120/min IP ceiling)</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <section class="grid grid-4" aria-label="Mounted services">
-        <div class="tile">
-          <div class="label-mono">ElysiaJS · Bun</div>
-          <div class="stat-val"><code>/v1/core</code></div>
-          <div class="stat-sub">Auth, rotating refresh tokens, <code>mk_live_*</code> keys, users, status</div>
-        </div>
-        <div class="tile">
-          <div class="label-mono">Go · Chi</div>
-          <div class="stat-val"><code>/v1/media</code></div>
-          <div class="stat-sub">Magic-byte &amp; SVG verified uploads, quarantined <code>staging/*</code> presign, HMAC signing</div>
-        </div>
-        <div class="tile">
-          <div class="label-mono">Hasura GraphQL</div>
-          <div class="stat-val"><code>/v1/links/graphql</code></div>
-          <div class="stat-sub">Allow-listed short-link GraphQL (256 KB cap, admin routes blocked at gateway)</div>
-        </div>
-        <div class="tile">
-          <div class="label-mono">Observability</div>
-          <div class="stat-val"><code>/health</code></div>
-          <div class="stat-sub">Aggregated service liveness, DB readiness &amp; Redis limiter telemetry</div>
-        </div>
-      </section>
-
-      <section class="tile">
-        <h2>Rate-Limit Policies (IETF Draft Headers)</h2>
-        <p>Every response emits standard <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code>, <code>RateLimit-Reset</code>, <code>RateLimit-Policy</code>, and <code>Retry-After</code> on HTTP 429.</p>
-        <div style="overflow-x:auto">
-          <table>
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>Tier</th>
-                <th>Quota</th>
-                <th>Keying</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td>Core</td><td><span class="badge">auth</span></td><td>10 req / 60s</td><td>Trusted Client IP (login, register, refresh, logout)</td></tr>
-              <tr><td>Core</td><td><span class="badge">auth-keys</span></td><td>20 req / 60s</td><td>Verified JWT User / Trusted IP (JWT-only)</td></tr>
-              <tr><td>Core</td><td><span class="badge">write</span></td><td>30 req / 60s</td><td>Verified JWT User / Dual IP + API key / IP</td></tr>
-              <tr><td>Core</td><td><span class="badge">read</span></td><td>100 req / 60s</td><td>Verified JWT User / Dual IP + API key / IP</td></tr>
-              <tr><td>Media</td><td><span class="badge">media-write</span></td><td>20 req / 60s</td><td>User ID (upload, presign, confirm, purge, delete; 120/min IP ceiling)</td></tr>
-              <tr><td>Media</td><td><span class="badge">media-read</span></td><td>100 req / 60s</td><td>User ID (list, get, sign; 120/min IP ceiling)</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="grid grid-2">
-        <div class="tile">
-          <h2>Working Quick-Start Examples</h2>
-          <p>Check runtime health &amp; Redis rate-limiter mode:</p>
-          <pre><code>curl -sS https://api.mikeodnis.dev/v1/core/status</code></pre>
-          <p style="margin-top:0.85rem">Sign in and upload an asset to <code>cdn.mikeodnis.dev</code>:</p>
-          <pre><code>JWT=$(curl -sS -X POST https://api.mikeodnis.dev/v1/core/auth/login \
+      <div class="split">
+        <section class="section" aria-labelledby="start-heading">
+          <div class="section-head">
+            <h2 id="start-heading" class="section-label">Working quick-start examples</h2>
+          </div>
+          <div class="tile">
+            <div class="steps">
+              <div class="step">
+                <p class="step-label">Check runtime health &amp; Redis rate-limiter mode:</p>
+                <pre class="code" tabindex="0"><code>curl -sS https://api.mikeodnis.dev/v1/core/status</code></pre>
+              </div>
+              <div class="step">
+                <p class="step-label">Sign in and upload an asset to <code>cdn.mikeodnis.dev</code>:</p>
+                <pre class="code" tabindex="0"><code>JWT=$(curl -sS -X POST https://api.mikeodnis.dev/v1/core/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@mikeodnis.dev","password":"..."}' | jq -r .access_token)
 
 curl -sS -X POST https://api.mikeodnis.dev/v1/media/upload \
   -H "Authorization: Bearer $JWT" \
   -F "file=@./image.png" -F "visibility=public"</code></pre>
-        </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-        <div class="tile">
-          <h2>OpenAPI, LLM &amp; Security Discovery</h2>
-          <p>Machine-readable contracts for SDKs, AI agents, and security researchers:</p>
-          <table>
-            <tbody>
-              <tr><td><a href="/docs"><code>/docs</code></a></td><td>Unified Scalar UI (Core + Media + CDN)</td></tr>
-              <tr><td><a href="/v1/core/openapi.json"><code>/v1/core/openapi.json</code></a></td><td>Core API OpenAPI 3.1 JSON</td></tr>
-              <tr><td><a href="/v1/media/openapi.json"><code>/v1/media/openapi.json</code></a></td><td>Media API OpenAPI 3.0 JSON</td></tr>
-              <tr><td><a href="/llms.txt"><code>/llms.txt</code></a> &amp; <a href="/llms-full.txt"><code>/llms-full.txt</code></a></td><td>LLM &amp; AEO Markdown guides</td></tr>
-              <tr><td><a href="/.well-known/security.txt"><code>/.well-known/security.txt</code></a></td><td>RFC 9116 security contact</td></tr>
-              <tr><td><a href="/robots.txt"><code>/robots.txt</code></a> &amp; <a href="/sitemap.xml"><code>/sitemap.xml</code></a></td><td>Crawler &amp; sitemap directives</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+        <section class="section" aria-labelledby="discovery-heading">
+          <div class="section-head">
+            <h2 id="discovery-heading" class="section-label">OpenAPI, LLM &amp; security discovery</h2>
+          </div>
+          <div class="tile">
+            <p class="tile-intro">Machine-readable contracts for SDKs, AI agents, and security researchers:</p>
+            <ul class="discovery">
+              <li>
+                <span class="discovery-paths"><a href="/docs"><code>/docs</code></a></span>
+                <span class="discovery-desc">Unified Scalar UI (Core + Media + CDN)</span>
+              </li>
+              <li>
+                <span class="discovery-paths"><a href="/v1/core/openapi.json"><code>/v1/core/openapi.json</code></a></span>
+                <span class="discovery-desc">Core API OpenAPI 3.1 JSON</span>
+              </li>
+              <li>
+                <span class="discovery-paths"><a href="/v1/media/openapi.json"><code>/v1/media/openapi.json</code></a></span>
+                <span class="discovery-desc">Media API OpenAPI 3.0 JSON</span>
+              </li>
+              <li>
+                <span class="discovery-paths"><a href="/llms.txt"><code>/llms.txt</code></a> &amp; <a href="/llms-full.txt"><code>/llms-full.txt</code></a></span>
+                <span class="discovery-desc">LLM &amp; AEO Markdown guides</span>
+              </li>
+              <li>
+                <span class="discovery-paths"><a href="/.well-known/security.txt"><code>/.well-known/security.txt</code></a></span>
+                <span class="discovery-desc">RFC 9116 security contact</span>
+              </li>
+              <li>
+                <span class="discovery-paths"><a href="/robots.txt"><code>/robots.txt</code></a> &amp; <a href="/sitemap.xml"><code>/sitemap.xml</code></a></span>
+                <span class="discovery-desc">Crawler &amp; sitemap directives</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+      </div>
 
-      <section class="tile faq">
-        <h2>Frequently Asked Questions</h2>
-        <details open>
-          <summary>How do JSON API clients use the root endpoint?</summary>
-          <p><code>GET /</code> uses content negotiation: browsers receive this Live Console page, while non-HTML API clients (<code>Accept: application/json</code> or default <code>curl</code>) receive the machine-readable JSON route descriptor.</p>
-        </details>
-        <details>
-          <summary>Can I upload files without writing curl commands?</summary>
-          <p>Yes — open <a href="https://cdn.mikeodnis.dev/upload">cdn.mikeodnis.dev/upload</a> (installable PWA on Android and Desktop) to sign in, drag-and-drop, paste screenshots, or share directly from your phone into Cloudflare R2.</p>
-        </details>
+      <section class="section" aria-labelledby="faq-heading">
+        <div class="section-head">
+          <h2 id="faq-heading" class="section-label">Frequently asked questions</h2>
+        </div>
+        <div class="tile tile-flush">
+          <details class="faq-item" open>
+            <summary>How do JSON API clients use the root endpoint?</summary>
+            <div class="faq-body"><p><code>GET /</code> uses content negotiation: browsers receive this Live Console page, while non-HTML API clients (<code>Accept: application/json</code> or default <code>curl</code>) receive the machine-readable JSON route descriptor.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>Can I upload files without writing curl commands?</summary>
+            <div class="faq-body"><p>Yes. Open <a href="https://cdn.mikeodnis.dev/upload" target="_blank" rel="noopener noreferrer">cdn.mikeodnis.dev/upload<span class="sr-only"> (opens in a new tab)</span></a> (installable PWA on Android and Desktop) to sign in, drag-and-drop, paste screenshots, or share directly from your phone into Cloudflare R2.</p></div>
+          </details>
+        </div>
       </section>
     </main>
 
-    <footer>
-      <span>© 2026 Mike Odnis · <a href="https://github.com/WomB0ComB0/api">WomB0ComB0/api</a> (Apache-2.0)</span>
-      <span id="status-foot">Probing /v1/core/status…</span>
+    <footer class="site-footer">
+      <div class="footer-row">
+        <div class="footer-start">
+          <p class="footer-line">
+            <a class="footer-link" href="https://github.com/WomB0ComB0/api/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">Apache-2.0<span class="sr-only"> (opens in a new tab)</span></a>
+            2025-present &#169;
+            <a class="footer-link" href="https://github.com/WomB0ComB0" target="_blank" rel="noopener noreferrer">Mike Odnis<span class="sr-only"> (opens in a new tab)</span></a>
+          </p>
+          <a class="footer-link" href="https://github.com/WomB0ComB0/api" target="_blank" rel="noopener noreferrer">WomB0ComB0/api<span class="sr-only"> (opens in a new tab)</span></a>
+        </div>
+        <div class="footer-end">
+          <nav class="footer-nav" aria-label="Ecosystem links">
+              <a class="footer-link" href="https://mikeodnis.dev" target="_blank" rel="noopener noreferrer">Portfolio<span class="sr-only"> (opens in a new tab)</span></a>
+              <span class="footer-sep" aria-hidden="true">•</span>
+              <a class="footer-link" href="https://links.mikeodnis.dev" target="_blank" rel="noopener noreferrer">Links<span class="sr-only"> (opens in a new tab)</span></a>
+              <span class="footer-sep" aria-hidden="true">•</span>
+              <a class="footer-link" href="https://blog.mikeodnis.dev" target="_blank" rel="noopener noreferrer">Blog<span class="sr-only"> (opens in a new tab)</span></a>
+              <span class="footer-sep" aria-hidden="true">•</span>
+              <a class="footer-link" href="https://news.mikeodnis.dev" target="_blank" rel="noopener noreferrer">News<span class="sr-only"> (opens in a new tab)</span></a>
+              <span class="footer-sep" aria-hidden="true">•</span>
+              <a class="footer-link" href="https://cdn.mikeodnis.dev" target="_blank" rel="noopener noreferrer">CDN<span class="sr-only"> (opens in a new tab)</span></a>
+              <span class="footer-sep" aria-hidden="true">•</span>
+              <a class="footer-link" href="https://elysium.tools" target="_blank" rel="noopener noreferrer">OSS<span class="sr-only"> (opens in a new tab)</span></a>
+          </nav>
+          <span class="footer-sep" aria-hidden="true">•</span>
+          <a class="status-pill" href="https://status.mikeodnis.dev" target="_blank" rel="noopener noreferrer" data-status data-tone="idle" aria-label="Status: checking (opens in a new tab)">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>Status</span>
+          </a>
+        </div>
+      </div>
     </footer>
   </div>
 
+  <div class="edge-haze" aria-hidden="true"></div>
+
+  <nav class="mobile-bar" aria-label="Mobile navigation">
+    <div class="mobile-bar-inner">
+      <button class="bar-btn" type="button" popovertarget="site-menu" aria-label="Open navigation menu"><svg class="icon" aria-hidden="true"><use href="#i-bars-3"/></svg><span>Menu</span></button>
+      <a class="bar-btn bar-btn-aux" href="/docs" aria-label="Docs: API reference"><svg class="icon" aria-hidden="true"><use href="#i-book-open"/></svg><span aria-hidden="true">Docs</span></a>
+    </div>
+  </nav>
+
+  <div id="site-menu" class="menu" popover role="dialog" aria-labelledby="site-menu-title">
+    <div class="menu-head">
+      <h2 id="site-menu-title" class="menu-title">Site menu</h2>
+      <button class="menu-close" type="button" popovertarget="site-menu" popovertargetaction="hide" aria-label="Close menu"><svg class="icon" aria-hidden="true"><use href="#i-x-mark"/></svg></button>
+    </div>
+    <nav class="menu-body" aria-label="Site pages">
+      <div class="menu-group menu-group-site">
+        <h3 id="menu-site" class="menu-group-label">This site</h3>
+        <ul class="menu-list" aria-labelledby="menu-site">
+              <li><a class="menu-link" href="/" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span class="menu-link-name">Home</span><span class="menu-here">here</span></a></li>
+              <li><a class="menu-link" href="/docs"><svg class="icon" aria-hidden="true"><use href="#i-book-open"/></svg><span class="menu-link-name">API reference</span></a></li>
+              <li><a class="menu-link" href="/v1/core/docs"><svg class="icon" aria-hidden="true"><use href="#i-cpu-chip"/></svg><span class="menu-link-name">Core docs</span></a></li>
+              <li><a class="menu-link" href="https://github.com/WomB0ComB0/api" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-code-bracket"/></svg><span class="menu-link-name">Source on GitHub</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+        </ul>
+      </div>
+      <div class="menu-group">
+        <h3 id="menu-network" class="menu-group-label">*.mikeodnis.dev</h3>
+        <ul class="menu-list" aria-labelledby="menu-network">
+              <li><a class="menu-link" href="https://mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span class="menu-link-name">Portfolio</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://links.mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg><span class="menu-link-name">Links</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://blog.mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-document-text"/></svg><span class="menu-link-name">Blog</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://news.mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-newspaper"/></svg><span class="menu-link-name">News</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="/" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-cpu-chip"/></svg><span class="menu-link-name">API</span><span class="menu-here">here</span></a></li>
+              <li><a class="menu-link" href="https://cdn.mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-cloud"/></svg><span class="menu-link-name">CDN</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://status.mikeodnis.dev" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-signal"/></svg><span class="menu-link-name">Status</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://mikeodnis.dev/sponsor" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-heart"/></svg><span class="menu-link-name">Sponsor</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+        </ul>
+      </div>
+      <div class="menu-group">
+        <h3 id="menu-ventures" class="menu-group-label">Ventures</h3>
+        <ul class="menu-list" aria-labelledby="menu-ventures">
+              <li><a class="menu-link" href="https://elysium.tools" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-code-bracket"/></svg><span class="menu-link-name">Elysium Tools</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+              <li><a class="menu-link" href="https://atroviola.com" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#i-briefcase"/></svg><span class="menu-link-name">Atroviola</span><svg class="icon icon-ext" aria-hidden="true"><use href="#i-arrow-up-right"/></svg><span class="sr-only"> (opens in a new tab)</span></a></li>
+        </ul>
+      </div>
+    </nav>
+  </div>
+
   <script>
-    fetch('/v1/core/status').then(r => r.json()).then(d => {
-      const foot = document.getElementById('status-foot');
-      const pill = document.getElementById('live-pill-text');
-      if (d && d.status === 'ok') {
-        const mode = d.rate_limiter?.store_mode || 'active';
-        if (pill) pill.textContent = 'Live · limiter: ' + mode;
-        if (foot) foot.textContent = 'Core v' + (d.version || '1.0.0') + ' · uptime ' + Math.floor(d.uptime_seconds || 0) + 's · rate-limiter ' + mode;
-      }
-    }).catch(() => {});
+    (() => {
+      const targets = document.querySelectorAll('[data-status]');
+      const set = (tone, word, detail) => {
+        for (const el of targets) {
+          el.dataset.tone = tone;
+          const w = el.querySelector('.status-word');
+          const d = el.querySelector('.status-detail');
+          if (w) w.textContent = word;
+          if (d) d.textContent = detail;
+          if (el.classList.contains('status-pill')) el.setAttribute('aria-label', 'Status: ' + word + ' (opens in a new tab)');
+        }
+      };
+      const up = (s) => {
+        const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+        return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm';
+      };
+      fetch('/v1/core/status', { headers: { Accept: 'application/json' } })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+        .then((d) => {
+          if (d && d.status === 'ok') {
+            const mode = (d.rate_limiter && d.rate_limiter.store_mode) || 'active';
+            set('live', 'Live', 'limiter ' + mode + ' · core v' + (d.version || '1.0.0') + ' · up ' + up(d.uptime_seconds || 0));
+          } else {
+            set('ongoing', 'Degraded', 'core ' + ((d && d.status) || 'unknown'));
+          }
+        })
+        .catch(() => set('idle', 'Status unavailable', ''));
+    })();
   </script>
 </body>
 </html>

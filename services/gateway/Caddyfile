@@ -134,6 +134,16 @@
 		file_server
 	}
 
+	# The shared subdomain stylesheet for the root page (the bytes cdn.mikeodnis.dev inlines), cached
+	# like the page itself.
+	@brandcss path /_brand/subdomain.css
+	handle @brandcss {
+		header Content-Type "text/css; charset=utf-8"
+		header Cache-Control "public, max-age=300"
+		root * /srv/static
+		file_server
+	}
+
 	@docs path /docs /docs/
 	handle @docs {
 		header Content-Type "text/html; charset=utf-8"
