@@ -183,6 +183,7 @@ flowchart LR
             TM["test-media\nGo 1.26.11 vet · -race · AST boundary"]
             TH["test-health\nPython unittest · cache & HEAD tests"]
             TI["validate-infra\nCompose dev+prod · Caddyfile validate"]
+            TG["test-gateway\nbuilt Caddy image · served routes & headers"]
         end
 
         Build["Matrix Docker Build & Push (GHCR)\ncore · media · health · gateway · hasura\n(GHA Buildx layer cache)"]
@@ -197,12 +198,14 @@ flowchart LR
     end
 
     Trigger --> Filter
-    Filter --> TC & TM & TH & TI
-    TC & TM & TH & TI --> Build --> Deploy --> Smoke
+    Filter --> TC & TM & TH & TI & TG
+    TC & TM & TH & TI & TG --> Build --> Deploy --> Smoke
     Trigger --> BA & GV & SL
 ```
 
 Weekly grouped dependency PRs are managed automatically via [`.github/dependabot.yml`](./.github/dependabot.yml) across `bun`, `gomod`, `docker`, and `github-actions`. All workflows are audited with `zizmor` (`0` findings) with 40-char commit SHA pinning and `persist-credentials: false`.
+
+`test-gateway` builds `services/gateway/Dockerfile`, runs the image with every upstream pointed at a closed port, and checks the root page, `/_brand` assets, static routes and security headers it actually serves. Run it locally with `services/gateway/tests/run.sh` (`CONTAINER_ENGINE=podman` for Podman).
 
 ### SemVer Releases (`.github/workflows/release.yml`)
 

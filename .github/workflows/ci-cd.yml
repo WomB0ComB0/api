@@ -169,9 +169,29 @@ jobs:
           docker run --rm -v "${{ github.workspace }}/services/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile
 
+  test-gateway:
+    name: Test Gateway (built image, served routes & headers)
+    needs: changes
+    if: always() && (needs.changes.outputs.gateway == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      # Builds services/gateway/Dockerfile, runs it with every upstream pointed at a closed local
+      # port, and checks what it serves with services/gateway/tests/gateway.test.ts.
+      - name: Build the gateway image and test what it serves
+        run: services/gateway/tests/run.sh
+
   build-images:
     name: Build & Push (${{ matrix.service }})
-    needs: [changes, test-core, test-media, test-health, validate-infra]
+    needs: [changes, test-core, test-media, test-health, validate-infra, test-gateway]
     if: |
       always() &&
       !contains(needs.*.result, 'failure') &&
@@ -254,10 +274,13 @@ jobs:
   deploy-railway:
     name: Deploy Changed Services to Railway
     needs: [changes, build-images]
+    # build-images is skipped, not failed, when a test job fails, so require its success here or a
+    # failing test would still let `railway up` deploy the service from source.
     if: |
       always() &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled') &&
+      needs.build-images.result == 'success' &&
       (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
