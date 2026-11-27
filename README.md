@@ -205,7 +205,7 @@ flowchart LR
 
 Weekly grouped dependency PRs are managed automatically via [`.github/dependabot.yml`](./.github/dependabot.yml) across `bun`, `gomod`, `docker`, and `github-actions`. All workflows are audited with `zizmor` (`0` findings) with 40-char commit SHA pinning and `persist-credentials: false`.
 
-`test-gateway` builds `services/gateway/Dockerfile`, runs the image with every upstream pointed at a closed port, and checks the root page, `/_brand` assets, static routes and security headers it actually serves. Run it locally with `services/gateway/tests/run.sh` (`CONTAINER_ENGINE=podman` for Podman).
+`test-gateway` builds `services/gateway/Dockerfile`, runs the image with every upstream pointed at a closed port, and checks the root page, `/_brand` assets, static routes, security headers and error responses (file_server `404`/`405`, the `502` for a down upstream) it actually serves. Run it locally with `services/gateway/tests/run.sh` (`CONTAINER_ENGINE=podman` for Podman).
 
 ### SemVer Releases (`.github/workflows/release.yml`)
 
@@ -232,7 +232,7 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
   - `core-service`: `pg.Pool` idle error listener, `statement_timeout: 10s`, `query_timeout: 12s`, 2s single-flight `/health/ready` DB cache, `maxRequestBodySize: 1 MiB`.
   - `media-service`: `pgxpool` `HealthCheckPeriod: 30s`, `MaxConnLifetime: 30m`, `statement_timeout: 10s`, 2s single-flight `/health/ready` Postgres+R2 cache, `ReadHeaderTimeout: 10s`, HTTP/2 R2 transport with `3x` retries.
   - `health-aggregator`: shared thread pool, 2s coalesced cache, bounded 64 KiB body drain, 10s idle socket timeout, sanitized errors with zero internal URL leakage, `PYTHONOPTIMIZE=2`-safe Docker `HEALTHCHECK`, `GET`/`HEAD`, graceful `SIGTERM`.
-  - `gateway`: Caddy 2.11 `trusted_proxies_strict`, `lb_try_duration 3s` / `lb_try_interval 250ms`, HTTP keepalive pools (`64`/`32`), HSTS preload + non-clobbering `?Referrer-Policy` / `?Permissions-Policy` / `?CORP`.
+  - `gateway`: Caddy 2.11 `trusted_proxies_strict`, `lb_try_duration 3s` / `lb_try_interval 250ms`, HTTP keepalive pools (`64`/`32`), HSTS preload + non-clobbering `?Referrer-Policy` / `?Permissions-Policy` / `?CORP`, the same headers on every error (`handle_errors`: original status, empty body, `Cache-Control: no-store`, `default-src 'none'` CSP, no upstream detail).
 
 ---
 
@@ -241,7 +241,7 @@ Pushing an annotated SemVer tag (`vX.Y.Z`) or triggering `workflow_dispatch` run
 ### Portal, Interactive Docs, Discovery & Brand Assets (Gateway)
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET`/`HEAD` | `/` | Public | Content-negotiated: Live Console HTML portal + live `/health` telemetry + JSON-LD (`WebAPI`, `FAQPage`) for browsers; JSON service descriptor for API/CLI clients |
+| `GET`/`HEAD` | `/` | Public | Content-negotiated by `Accept` (both answers send `Vary: Accept`): Live Console HTML portal + live `/health` telemetry + JSON-LD (`WebAPI`, `FAQPage`) for browsers; JSON service descriptor for API/CLI clients |
 | `GET` | `/docs` | Public | Unified multi-spec **Scalar OpenAPI 3.1** UI loading Core API, Media API & CDN Edge API |
 | `GET` | `/llms.txt`, `/llms-full.txt` | Public | Concise and full LLM/AEO guides for AI crawlers & coding agents |
 | `GET` | `/.well-known/security.txt`, `/robots.txt`, `/sitemap.xml` | Public | RFC 9116 security policy, explicit AI crawler rules (`GPTBot`, `OAI-SearchBot`, `ClaudeBot`, `PerplexityBot`), XML sitemap |

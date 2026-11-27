@@ -21,9 +21,11 @@
 	}
 }
 
-:{$PORT:8080} {
-	encode zstd gzip
-
+# Site-wide security headers. The - and ? operations make Caddy defer the whole block to a
+# response-writer wrapper, which applies it when a route writes its response. An error (a
+# file_server 404/405, or a reverse_proxy 502 when an upstream is down) is written by Caddy's error
+# path instead, which never goes through that wrapper, so handle_errors imports the block again.
+(security_headers) {
 	header {
 		-Server
 		X-Content-Type-Options "nosniff"
@@ -32,6 +34,26 @@
 		?Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 		?Cross-Origin-Resource-Policy "same-site"
+	}
+}
+
+:{$PORT:8080} {
+	encode zstd gzip
+
+	import security_headers
+
+	# Every error keeps the status the route raised and gets an empty body, so no upstream address or
+	# Go error text reaches the client. Routes set their Cache-Control, Content-Type and CSP before
+	# file_server or reverse_proxy fails, so they are replaced here: an error is never cached, has no
+	# content to type and allows nothing.
+	handle_errors {
+		import security_headers
+		header {
+			Cache-Control "no-store"
+			Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+			-Content-Type
+		}
+		respond "" {err.status_code}
 	}
 
 	@gwhealth path /gateway/health
@@ -211,7 +233,10 @@
 		path /
 		header Accept *text/html*
 	}
+	# / answers HTML here and JSON in the catch-all below, chosen by Accept, so both answers say
+	# Vary: Accept for shared caches. + appends, so another Vary token (encode's) is never replaced.
 	handle @root_html {
+		header +Vary Accept
 		header Content-Type "text/html; charset=utf-8"
 		header Cache-Control "public, max-age=300"
 		header Link `<https://api.mikeodnis.dev/llms.txt>; rel="describedby"; type="text/markdown", <https://api.mikeodnis.dev/v1/core/openapi.json>; rel="service-desc"; type="application/openapi+json", <https://api.mikeodnis.dev/.well-known/security.txt>; rel="security"`
@@ -222,6 +247,9 @@
 	}
 
 	handle {
+		# Only / has an HTML answer (@root_html), so only its JSON answer varies by Accept. Every
+		# other path gets this JSON whatever the client accepts and stays a single cache entry.
+		header / +Vary Accept
 		header Content-Type application/json
 		header Link `<https://api.mikeodnis.dev/llms.txt>; rel="describedby"; type="text/markdown", <https://api.mikeodnis.dev/v1/core/openapi.json>; rel="service-desc"; type="application/openapi+json"`
 		respond `{"service":"api.mikeodnis.dev","routes":["/health","/v1/core","/v1/media","/v1/links/graphql"],"docs":["https://api.mikeodnis.dev/docs","https://api.mikeodnis.dev/v1/core/docs"],"openapi":["https://api.mikeodnis.dev/v1/core/openapi.json","https://api.mikeodnis.dev/v1/media/openapi.json"],"llms":"https://api.mikeodnis.dev/llms.txt","security":"https://api.mikeodnis.dev/.well-known/security.txt","upload_studio":"https://cdn.mikeodnis.dev/upload"}` 200
