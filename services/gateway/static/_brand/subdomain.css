@@ -22,7 +22,7 @@
  * Token names and values are the core's (portfolio src/styles/globals.css, the first :root
  * block) and links.mikeodnis.dev's (app/assets/css/main.css). Values are literals, never
  * color-mix() or relative colours, so every browser that reads oklch() paints the same thing.
- * Markup contract: shared/spec.md.
+ * Markup contract: docs/design/subdomain-design.md.
  */
 
 /* ---------------------------------------------------------------- fonts */
